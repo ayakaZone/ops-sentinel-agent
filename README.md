@@ -1,4 +1,4 @@
-# SuperBizAgent
+# OpsSentinelAgent
 
 > 企业级智能对话和运维助手，支持 RAG 知识库问答和 AIOps 智能诊断
 
@@ -34,7 +34,7 @@
 ```bash
 # 1. 克隆项目
 git clone <repository_url>
-cd super_biz_agent_py
+cd ops-sentinel-agent
 
 # 2. 安装依赖（推荐使用 uv）
 # 方式 1: 使用 uv（推荐，更快）
@@ -64,7 +64,7 @@ make start
 ```powershell
 # 1. 克隆项目
 git clone <repository_url>
-cd super_biz_agent_py
+cd ops-sentinel-agent
 
 # 2. 创建虚拟环境并安装依赖
 # 方式 1: 使用 uv（推荐，更快）
@@ -163,7 +163,7 @@ curl -X POST "http://localhost:9900/api/aiops" \
 ## 📁 项目结构
 
 ```
-super_biz_agent_py/
+ops-sentinel-agent/
 ├── app/                                    # 应用核心
 │   ├── __init__.py                         # 包初始化（自动加载日志配置）
 │   ├── main.py                             # FastAPI 应用入口
@@ -410,7 +410,12 @@ netstat -ano | findstr :8004  # Monitor MCP
 - [阿里云 DashScope](https://dashscope.aliyun.com/)
 - [MCP 协议](https://modelcontextprotocol.io/)
 
+## 🙏 项目说明
+
+本项目最初基于网络公开教程搭建，在此基础上进行了系统性的源码精读与实际改进。改进内容会随进度逐步记录于此：
+
+- 待补充（后续按改进计划逐项完成后更新）
+
 ## 📄 许可证
-author： chief
 
 MIT License

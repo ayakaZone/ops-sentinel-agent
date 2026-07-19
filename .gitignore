@@ -82,3 +82,6 @@ dmypy.json
 # Ruff
 .ruff_cache/
 
+# 个人学习笔记，不作为项目交付物提交
+ARCHITECTURE.md
+
