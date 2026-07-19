@@ -15,6 +15,25 @@ class OpsSentinelAgentApp {
         this.initMarkdown();
         this.checkAndSetCentered();
         this.renderChatHistory();
+        this.renderRandomGreeting();
+    }
+
+    // 随机展示一句带 emoji 的问候语（淡色小字，显示在主欢迎语下面）
+    renderRandomGreeting() {
+        const greetings = [
+            '有什么系统告警，随时找我 🚨',
+            '日志、指标、知识库，我都能查 🔍',
+            '线上有问题不要慌，先问问我 🛠️',
+            '随时待命，24 小时在线的运维搭子 🌙',
+            '有 bug 别怕，我陪你一起查 🐛',
+            '喝杯咖啡的时间，我先帮你查个告警 ☕',
+            '你的专属 AIOps 小帮手，随叫随到 ⚡',
+            '今天的服务器还好吗？我来帮你看看 👀',
+        ];
+        const subtitleEl = document.getElementById('welcomeSubtitle');
+        if (subtitleEl) {
+            subtitleEl.textContent = greetings[Math.floor(Math.random() * greetings.length)];
+        }
     }
 
     // 初始化Markdown配置
@@ -387,11 +406,12 @@ class OpsSentinelAgentApp {
         
         this.chatHistories.forEach((history, index) => {
             const historyItem = document.createElement('div');
-            historyItem.className = 'history-item';
+            historyItem.className = history.id === this.sessionId ? 'history-item active' : 'history-item';
             historyItem.dataset.historyId = history.id;
             
             historyItem.innerHTML = `
                 <div class="history-item-content">
+                    <span class="history-item-dot"></span>
                     <span class="history-item-title">${this.escapeHtml(history.title)}</span>
                 </div>
                 <button class="history-item-delete" data-history-id="${history.id}" title="删除">
@@ -457,7 +477,7 @@ class OpsSentinelAgentApp {
                         this.currentChatHistory = [];
                         backendHistory.forEach(msg => {
                             // 后端返回格式: {role: "user|assistant", content: "...", timestamp: "..."}
-                            const messageType = msg.role === 'user' ? 'user' : 'bot';
+                            const messageType = msg.role === 'user' ? 'user' : 'assistant';
                             this.addMessage(messageType, msg.content, false, false);
                         });
                     } else {
@@ -616,7 +636,7 @@ class OpsSentinelAgentApp {
         // 更新输入框状态
         if (this.messageInput) {
             this.messageInput.disabled = this.isStreaming;
-            this.messageInput.placeholder = '问问智能OnCall助手';
+            this.messageInput.placeholder = '问问 OpsSentinel 小助手';
         }
     }
 

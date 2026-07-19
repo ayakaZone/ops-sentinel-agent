@@ -28,6 +28,7 @@ body {
     display: flex;
     flex-direction: column;
     border-right: 1px solid #dadce0;
+    user-select: none;
 }
 
 .sidebar-header {
@@ -67,7 +68,7 @@ body {
     gap: 12px;
     color: #202124;
     font-size: 14px;
-    font-weight: 500;
+    font-weight: 600;
     transition: all 0.3s ease;
     position: relative;
 }
@@ -99,7 +100,7 @@ body {
     gap: 12px;
     color: #202124;
     font-size: 14px;
-    font-weight: 500;
+    font-weight: 600;
     transition: all 0.3s ease;
 }
 
@@ -149,10 +150,19 @@ body {
     cursor: pointer;
     transition: all 0.2s;
     position: relative;
+    user-select: none;
 }
 
 .history-item:hover {
     background: #f1f3f4;
+}
+
+.history-item.active {
+    background: #d2e3fc;
+}
+
+.history-item.active:hover {
+    background: #c4daf8;
 }
 
 .history-item-content {
@@ -160,15 +170,27 @@ body {
     min-width: 0;
     display: flex;
     align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
+.history-item-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #5f6368;
+    flex-shrink: 0;
 }
 
 .history-item-title {
     font-size: 14px;
+    font-weight: 500;
     color: #202124;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     flex: 1;
+    cursor: pointer;
 }
 
 .history-item-delete {
@@ -327,6 +349,13 @@ body {
 
 .welcome-greeting p {
     margin: 0;
+}
+
+.welcome-greeting p.welcome-subtitle {
+    margin-top: 10px;
+    font-size: 0.95rem;
+    font-weight: 400;
+    color: #9aa0a6;
 }
 
 .welcome-message {
