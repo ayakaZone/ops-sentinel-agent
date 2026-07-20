@@ -42,6 +42,15 @@ class Settings(BaseSettings):
     chunk_max_size: int = 800
     chunk_overlap: int = 100
 
+    # 对话历史摘要压缩配置（SummarizationMiddleware）
+    # qwen-max 最大输入长度 30K，trigger 取其 80%；keep 保留摘要后的原始消息 token 数
+    context_summary_trigger_tokens: int = 24000
+    context_summary_keep_tokens: int = 4000
+
+    # 软限流配置（按天重置，超限仅在响应末尾附加提示，不拦截请求）
+    daily_chat_limit: int = 50
+    daily_aiops_limit: int = 20
+
     # MCP 服务配置（transport: stdio | sse | streamable-http）
     # 腾讯云托管 MCP 的 URL 通常含 /sse/，需使用 sse；本地 FastMCP 使用 streamable-http
     mcp_cls_transport: str = "streamable-http"

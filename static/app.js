@@ -16,6 +16,7 @@ class OpsSentinelAgentApp {
         this.checkAndSetCentered();
         this.renderChatHistory();
         this.renderRandomGreeting();
+        this.fetchUsage();
     }
 
     // 随机展示一句带 emoji 的问候语（淡色小字，显示在主欢迎语下面）
@@ -128,7 +129,18 @@ class OpsSentinelAgentApp {
         this.modeDropdown = document.getElementById('modeDropdown');
         this.currentModeText = document.getElementById('currentModeText');
         this.fileInput = document.getElementById('fileInput');
-        
+
+        // 用量圆环元素
+        this.usageRingBtn = document.getElementById('usageRingBtn');
+        this.usagePanel = document.getElementById('usagePanel');
+        this.usageRingFill = document.getElementById('usageRingFill');
+        this.usageContextText = document.getElementById('usageContextText');
+        this.usageContextBar = document.getElementById('usageContextBar');
+        this.usageChatText = document.getElementById('usageChatText');
+        this.usageChatBar = document.getElementById('usageChatBar');
+        this.usageAiopsText = document.getElementById('usageAiopsText');
+        this.usageAiopsBar = document.getElementById('usageAiopsBar');
+
         // 聊天区域元素
         this.chatMessages = document.getElementById('chatMessages');
         this.loadingOverlay = document.getElementById('loadingOverlay');
@@ -152,6 +164,23 @@ class OpsSentinelAgentApp {
             this.aiOpsSidebarBtn.addEventListener('click', () => this.triggerAIOps());
         }
         
+        // 用量圆环
+        if (this.usageRingBtn) {
+            this.usageRingBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.toggleUsagePanel();
+            });
+        }
+
+        // 点击外部关闭用量面板
+        document.addEventListener('click', (e) => {
+            if (this.usageRingBtn && this.usagePanel &&
+                !this.usageRingBtn.contains(e.target) &&
+                !this.usagePanel.contains(e.target)) {
+                this.closeUsagePanel();
+            }
+        });
+
         // 模式选择下拉菜单
         if (this.modeSelectorBtn) {
             this.modeSelectorBtn.addEventListener('click', (e) => {
@@ -299,8 +328,11 @@ class OpsSentinelAgentApp {
         
         // 更新历史对话列表
         this.renderChatHistory();
+
+        // 新会话上下文用量归零，刷新用量圆环
+        this.fetchUsage();
     }
-    
+
     // 保存当前对话到历史记录（新建）
     saveCurrentChat() {
         if (this.currentChatHistory.length === 0) {
@@ -520,8 +552,11 @@ class OpsSentinelAgentApp {
         // 更新UI
         this.checkAndSetCentered();
         this.renderChatHistory();
+
+        // 切换到了别的会话，刷新用量圆环为该会话的用量
+        this.fetchUsage();
     }
-    
+
     // 删除历史对话
     async deleteChatHistory(historyId) {
         try {
@@ -565,6 +600,84 @@ class OpsSentinelAgentApp {
         } catch (error) {
             console.error('删除历史对话失败:', error);
             this.showNotification('删除失败: ' + error.message, 'error');
+        }
+    }
+
+    // 切换用量面板
+    toggleUsagePanel() {
+        if (this.usageRingBtn && this.usagePanel) {
+            const wrapper = this.usageRingBtn.closest('.usage-ring-wrapper');
+            if (wrapper) {
+                wrapper.classList.toggle('active');
+            }
+        }
+    }
+
+    // 关闭用量面板
+    closeUsagePanel() {
+        if (this.usageRingBtn && this.usagePanel) {
+            const wrapper = this.usageRingBtn.closest('.usage-ring-wrapper');
+            if (wrapper) {
+                wrapper.classList.remove('active');
+            }
+        }
+    }
+
+    // 根据用量百分比返回等级：<33% 绿色，33%~66% 橙色，>66% 红色
+    getUsageLevel(percent) {
+        if (percent >= 66) return 'red';
+        if (percent >= 33) return 'orange';
+        return 'green';
+    }
+
+    // 更新单条用量长条（进度条 + 文字）
+    updateUsageBar(barElement, textElement, used, limit, percent) {
+        if (!barElement || !textElement) return;
+        const level = this.getUsageLevel(percent);
+        barElement.style.width = Math.min(percent, 100) + '%';
+        barElement.classList.remove('level-orange', 'level-red');
+        if (level !== 'green') {
+            barElement.classList.add('level-' + level);
+        }
+        textElement.textContent = `${used} / ${limit} (${percent}%)`;
+    }
+
+    // 更新圆环的填充度和颜色
+    updateUsageRing(percent) {
+        if (!this.usageRingFill) return;
+        const circumference = 97.39; // 2 * π * 15.5（圆环半径 15.5 对应的周长）
+        const clamped = Math.min(Math.max(percent, 0), 100);
+        this.usageRingFill.style.strokeDashoffset = circumference * (1 - clamped / 100);
+
+        const level = this.getUsageLevel(clamped);
+        this.usageRingFill.classList.remove('level-orange', 'level-red');
+        if (level !== 'green') {
+            this.usageRingFill.classList.add('level-' + level);
+        }
+    }
+
+    // 拉取用量数据并刷新圆环 + 展开面板
+    async fetchUsage() {
+        try {
+            const response = await fetch(`${this.apiBaseUrl}/usage?session_id=${encodeURIComponent(this.sessionId)}`);
+            if (!response.ok) return;
+
+            const data = await response.json();
+            if (!(data.code === 200 && data.data)) return;
+
+            const { session_token_usage: ctx, daily_calls } = data.data;
+
+            this.updateUsageBar(this.usageContextBar, this.usageContextText, ctx.used, ctx.limit, ctx.percent);
+            this.updateUsageBar(this.usageChatBar, this.usageChatText,
+                daily_calls.chat.used, daily_calls.chat.limit, daily_calls.chat.percent);
+            this.updateUsageBar(this.usageAiopsBar, this.usageAiopsText,
+                daily_calls.aiops.used, daily_calls.aiops.limit, daily_calls.aiops.percent);
+
+            // 圆环整体状态取三项里占比最高的一项，反映当前最紧张的资源
+            const maxPercent = Math.max(ctx.percent, daily_calls.chat.percent, daily_calls.aiops.percent);
+            this.updateUsageRing(maxPercent);
+        } catch (error) {
+            console.error('获取用量信息失败:', error);
         }
     }
 
@@ -686,7 +799,8 @@ class OpsSentinelAgentApp {
         } finally {
             this.isStreaming = false;
             this.updateUI();
-            
+            this.fetchUsage(); // 每轮对话后刷新用量圆环
+
             // 如果当前对话是从历史记录加载的，更新历史记录
             if (this.isCurrentChatFromHistory && this.currentChatHistory.length > 0) {
                 this.updateCurrentChatHistory();
@@ -1634,6 +1748,7 @@ class OpsSentinelAgentApp {
             this.isStreaming = false;
             this.currentAIOpsMessage = null;
             this.updateUI();
+            this.fetchUsage(); // 每次诊断后刷新用量圆环
         }
     }
 

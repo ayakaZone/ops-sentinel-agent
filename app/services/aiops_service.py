@@ -9,6 +9,8 @@ from langgraph.checkpoint.memory import MemorySaver
 from loguru import logger
 
 from app.agent.aiops import PlanExecuteState, planner, executor, replanner
+from app.config import config
+from app.services.usage_tracker import daily_usage_counter
 
 
 # 节点名称常量
@@ -248,6 +250,13 @@ class AIOpsService:
         async for event in self.execute(aiops_task, session_id):
             # 转换事件格式以兼容旧的 API
             if event.get("type") == "complete":
+                report = event.get("response", "")
+
+                # 软限流：超过今日 AIOps 调用次数阈值时，在报告末尾附加友好提示（不拦截请求）
+                reminder = daily_usage_counter.increment_and_get_reminder("aiops", config.daily_aiops_limit)
+                if reminder:
+                    report += reminder
+
                 # 将 response 包装为 diagnosis 格式
                 yield {
                     "type": "complete",
@@ -255,7 +264,7 @@ class AIOpsService:
                     "message": "诊断流程完成",
                     "diagnosis": {
                         "status": "completed",
-                        "report": event.get("response", "")
+                        "report": report
                     }
                 }
             else:

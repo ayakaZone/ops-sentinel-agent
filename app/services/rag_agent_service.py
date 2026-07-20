@@ -14,6 +14,7 @@ from langchain_core.messages import (
     RemoveMessage,
     SystemMessage,
 )
+from langchain_core.messages.utils import count_tokens_approximately
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.message import REMOVE_ALL_MESSAGES, add_messages
 from langgraph.runtime import Runtime
@@ -29,6 +30,7 @@ from app.agent.mcp_client import (
     format_exception_chain,
     suggest_mcp_transport,
 )
+from app.services.usage_tracker import daily_usage_counter
 
 # 阿里千问大模型和langchain集成参考： https://docs.langchain.com/oss/python/integrations/chat/qwen
 # 注意：需要配置环境变量 DASHSCOPE_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1 否则默认访问的是新加坡站点
@@ -158,8 +160,8 @@ class RagAgentService:
             middleware=[
                 SummarizationMiddleware(
                     model=self.model,
-                    trigger=("tokens", 24000),  # 30K 输入上限的 80%，达到即触发摘要压缩
-                    keep=("tokens", 4000),  # 摘要后仍保留最近 4000 token 的原始完整消息
+                    trigger=("tokens", config.context_summary_trigger_tokens),
+                    keep=("tokens", config.context_summary_keep_tokens),
                 )
             ],
         )
@@ -253,6 +255,11 @@ class RagAgentService:
                     tool_names = [tc.get("name", "unknown") for tc in last_message.tool_calls]
                     logger.info(f"[会话 {session_id}] Agent 调用了工具: {tool_names}")
 
+                # 软限流：超过今日调用次数阈值时，在回答末尾附加友好提示（不拦截请求）
+                reminder = daily_usage_counter.increment_and_get_reminder("chat", config.daily_chat_limit)
+                if reminder:
+                    answer += reminder
+
                 logger.info(f"[会话 {session_id}] RAG Agent 查询完成（非流式）")
                 return answer
 
@@ -326,6 +333,11 @@ class RagAgentService:
                                         "node": node_name
                                     }
 
+            # 软限流：超过今日调用次数阈值时，多发一段提示内容（不拦截请求）
+            reminder = daily_usage_counter.increment_and_get_reminder("chat", config.daily_chat_limit)
+            if reminder:
+                yield {"type": "content", "data": reminder, "node": "usage_reminder"}
+
             logger.info(f"[会话 {session_id}] RAG Agent 查询完成（流式）")
             yield {"type": "complete"}
 
@@ -335,6 +347,28 @@ class RagAgentService:
                 f"[会话 {session_id}] RAG Agent 查询失败（流式）: {detail}"
             )
             yield {"type": "error", "data": detail}
+
+    def _get_raw_session_messages(self, session_id: str) -> list:
+        """
+        从 checkpointer 读取某个会话的原始 LangChain 消息对象列表（内部共用方法）
+
+        Args:
+            session_id: 会话ID（即 thread_id）
+
+        Returns:
+            list: 原始消息对象列表（BaseMessage 子类），无历史时返回空列表
+        """
+        # 使用 checkpointer 的 get_tuple 方法获取最新的检查点
+        # （get_tuple 才会返回带 .checkpoint 属性的 CheckpointTuple；
+        #  get() 直接返回原始 dict，之前误按 CheckpointTuple 的结构解析导致 KeyError）
+        config_dict = {"configurable": {"thread_id": session_id}}
+        checkpoint_tuple = self.checkpointer.get_tuple(config_dict)
+
+        if not checkpoint_tuple:
+            return []
+
+        checkpoint_data = checkpoint_tuple.checkpoint
+        return checkpoint_data.get("channel_values", {}).get("messages", [])
 
     def get_session_history(self, session_id: str) -> list:
         """
@@ -347,22 +381,12 @@ class RagAgentService:
             list: 消息历史列表 [{"role": "user|assistant", "content": "...", "timestamp": "..."}]
         """
         try:
-            # 使用 checkpointer 的 get_tuple 方法获取最新的检查点
-            # （get_tuple 才会返回带 .checkpoint 属性的 CheckpointTuple；
-            #  get() 直接返回原始 dict，之前误按 CheckpointTuple 的结构解析导致 KeyError）
-            config = {"configurable": {"thread_id": session_id}}
+            messages = self._get_raw_session_messages(session_id)
 
-            checkpoint_tuple = self.checkpointer.get_tuple(config)
-
-            if not checkpoint_tuple:
+            if not messages:
                 logger.info(f"获取会话历史: {session_id}, 消息数量: 0")
                 return []
 
-            checkpoint_data = checkpoint_tuple.checkpoint
-
-            # 从检查点中提取消息
-            messages = checkpoint_data.get("channel_values", {}).get("messages", [])
-            
             # 转换为前端需要的格式
             history = []
             for msg in messages:
@@ -391,10 +415,34 @@ class RagAgentService:
             
             logger.info(f"获取会话历史: {session_id}, 消息数量: {len(history)}")
             return history
-            
+
         except Exception as e:
             logger.error(f"获取会话历史失败: {session_id}, 错误: {e}")
             return []
+
+    def get_session_token_usage(self, session_id: str) -> dict:
+        """
+        获取当前会话历史消息的 token 用量（近似值）
+
+        计算口径与 SummarizationMiddleware 触发摘要压缩时完全一致
+        （同样调用 count_tokens_approximately + use_usage_metadata_scaling=True），
+        保证前端展示的数字和实际触发摘要的判断标准是同一套，不会两边对不上。
+
+        Args:
+            session_id: 会话ID（即 thread_id）
+
+        Returns:
+            dict: {"used": 已用 token 数, "limit": 触发摘要的阈值, "percent": 占比(%)}
+        """
+        limit = config.context_summary_trigger_tokens
+        try:
+            messages = self._get_raw_session_messages(session_id)
+            used = count_tokens_approximately(messages, use_usage_metadata_scaling=True) if messages else 0
+            percent = round(used / limit * 100, 1) if limit else 0.0
+            return {"used": used, "limit": limit, "percent": percent}
+        except Exception as e:
+            logger.error(f"获取会话 token 用量失败: {session_id}, 错误: {e}")
+            return {"used": 0, "limit": limit, "percent": 0.0}
 
     def clear_session(self, session_id: str) -> bool:
         """

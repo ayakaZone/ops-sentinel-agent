@@ -81,6 +81,38 @@
                                     </div>
                                 </div>
                                 <div class="right-actions">
+                                    <div class="usage-ring-wrapper">
+                                        <button class="usage-ring-btn" id="usageRingBtn" title="用量情况">
+                                            <svg class="usage-ring-svg" viewBox="0 0 36 36">
+                                                <circle class="usage-ring-bg" cx="18" cy="18" r="15.5"></circle>
+                                                <circle class="usage-ring-fill" id="usageRingFill" cx="18" cy="18" r="15.5"></circle>
+                                            </svg>
+                                        </button>
+                                        <div class="usage-panel" id="usagePanel">
+                                            <div class="usage-panel-header">用量情况</div>
+                                            <div class="usage-item">
+                                                <div class="usage-item-label">
+                                                    <span>当前对话上下文窗口</span>
+                                                    <span class="usage-item-value" id="usageContextText">0 / 0 (0%)</span>
+                                                </div>
+                                                <div class="usage-bar"><div class="usage-bar-fill" id="usageContextBar"></div></div>
+                                            </div>
+                                            <div class="usage-item">
+                                                <div class="usage-item-label">
+                                                    <span>今日对话调用次数</span>
+                                                    <span class="usage-item-value" id="usageChatText">0 / 0 (0%)</span>
+                                                </div>
+                                                <div class="usage-bar"><div class="usage-bar-fill" id="usageChatBar"></div></div>
+                                            </div>
+                                            <div class="usage-item">
+                                                <div class="usage-item-label">
+                                                    <span>今日智能运维调用次数</span>
+                                                    <span class="usage-item-value" id="usageAiopsText">0 / 0 (0%)</span>
+                                                </div>
+                                                <div class="usage-bar"><div class="usage-bar-fill" id="usageAiopsBar"></div></div>
+                                            </div>
+                                        </div>
+                                    </div>
                                     <div class="mode-selector-wrapper">
                                         <button class="mode-selector-btn" id="modeSelectorBtn">
                                             <span id="currentModeText">快速</span>
