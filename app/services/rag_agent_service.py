@@ -7,6 +7,7 @@
 from typing import Annotated, Any, AsyncGenerator, Dict, Sequence
 
 from langchain.agents import create_agent
+from langchain.agents.middleware import SummarizationMiddleware, before_model
 from langchain_core.messages import (
     BaseMessage,
     HumanMessage,
@@ -15,8 +16,9 @@ from langchain_core.messages import (
 )
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.message import REMOVE_ALL_MESSAGES, add_messages
+from langgraph.runtime import Runtime
 from loguru import logger
-from typing_extensions import TypedDict
+from typing_extensions import TypedDict, deprecated
 from langchain_qwq import ChatQwen
 
 from app.config import config
@@ -38,7 +40,13 @@ class AgentState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], add_messages]
 
 
-def trim_messages_middleware(state: AgentState) -> dict[str, Any] | None:
+@before_model
+@deprecated(
+    "已由官方 SummarizationMiddleware 取代：按消息条数硬截断可能切断 "
+    "AIMessage(tool_calls)/ToolMessage 配对，导致 DashScope API 报 400。"
+    "保留此实现仅供学习对比，未接入 create_agent。"
+)
+def trim_messages_middleware(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
     """
     修剪消息历史，只保留最近的几条消息以适应上下文窗口
 
@@ -49,6 +57,7 @@ def trim_messages_middleware(state: AgentState) -> dict[str, Any] | None:
 
     Args:
         state: Agent 状态
+        runtime: LangGraph 运行时上下文（本函数未使用，仅满足 before_model 钩子签名）
 
     Returns:
         包含修剪后消息的字典，如果无需修剪则返回 None
@@ -144,6 +153,15 @@ class RagAgentService:
             self.model,
             tools=all_tools,
             checkpointer=self.checkpointer,
+            # trim_messages_middleware：旧的硬截断方案，已弃用（见函数上的 @deprecated 说明），保留代码不启用
+            # middleware=[trim_messages_middleware],
+            middleware=[
+                SummarizationMiddleware(
+                    model=self.model,
+                    trigger=("tokens", 24000),  # 30K 输入上限的 80%，达到即触发摘要压缩
+                    keep=("tokens", 4000),  # 摘要后仍保留最近 4000 token 的原始完整消息
+                )
+            ],
         )
 
         self._agent_initialized = True
