@@ -195,7 +195,7 @@ class MilvusClientManager:
             raise RuntimeError("Collection 未初始化")
 
         index_params = {
-            "metric_type": "L2",  # 欧氏距离
+            "metric_type": "COSINE",  # 余弦相似度
             "index_type": "IVF_FLAT",
             "params": {"nlist": 128},
         }

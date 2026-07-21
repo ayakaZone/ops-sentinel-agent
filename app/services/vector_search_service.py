@@ -67,7 +67,7 @@ class VectorSearchService:
 
             # 3. 构建搜索参数
             search_params = {
-                "metric_type": "L2",  # 欧氏距离
+                "metric_type": "COSINE",  # 余弦相似度
                 "params": {"nprobe": 10},
             }
 
@@ -87,7 +87,7 @@ class VectorSearchService:
                     result = SearchResult(
                         id=hit.entity.get("id"),
                         content=hit.entity.get("content"),
-                        score=hit.distance,  # L2 距离，越小越相似
+                        score=hit.distance,  # COSINE 相似度，越大越相似
                         metadata=hit.entity.get("metadata", {}),
                     )
                     search_results.append(result)
