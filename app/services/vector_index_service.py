@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 
 from loguru import logger
 
+from app.services.document_cleaner_service import document_cleaner_service
 from app.services.document_splitter_service import document_splitter_service
 from app.services.vector_store_manager import vector_store_manager
 
@@ -151,15 +152,19 @@ class VectorIndexService:
             content = path.read_text(encoding="utf-8")
             logger.info(f"读取文件: {path}, 内容长度: {len(content)} 字符")
 
-            # 2. 删除该文件的旧数据（如果存在）
+            # 2. 清洗文本（Unicode规范化/去不可见字符/去页眉页脚/段落去重）
+            content = document_cleaner_service.clean(content)
+            logger.info(f"文本清洗完成: {path}, 清洗后长度: {len(content)} 字符")
+
+            # 3. 删除该文件的旧数据（如果存在）
             normalized_path = path.as_posix()
             vector_store_manager.delete_by_source(normalized_path)
 
-            # 3. 使用新的文档分割器
+            # 4. 使用新的文档分割器
             documents = document_splitter_service.split_document(content, normalized_path)
             logger.info(f"文档分割完成: {file_path} -> {len(documents)} 个分片")
 
-            # 4. 添加文档到向量存储
+            # 5. 添加文档到向量存储
             if documents:
                 vector_store_manager.add_documents(documents)
                 logger.info(f"文件索引完成: {file_path}, 共 {len(documents)} 个分片")
