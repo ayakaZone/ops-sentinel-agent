@@ -1,8 +1,10 @@
 """知识检索工具 - 从向量数据库中检索相关信息"""
 
+from http import HTTPStatus
 from textwrap import dedent
 from typing import List, Tuple
 
+from dashscope import TextReRank
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools import tool
@@ -75,6 +77,40 @@ def _expand_query(query: str) -> List[str]:
         return [query]
 
 
+def _rerank_documents(query: str, docs: List[Document], top_n: int) -> List[Document]:
+    """
+    用 DashScope 精排对候选文档重新排序
+
+    Args:
+        query: 用户的原始问题（精排用交叉编码器，对措辞不敏感，不需要用改写后的版本）
+        docs: 多角度检索去重合并后的候选文档
+        top_n: 最终保留的文档数量
+
+    Returns:
+        List[Document]: 按相关性排序、截断到 top_n 篇的文档列表；
+                        精排失败时退化为按原始检索顺序截取前 top_n 篇
+    """
+    try:
+        response = TextReRank.call(
+            model="gte-rerank-v2",
+            query=query,
+            documents=[doc.page_content for doc in docs],
+            top_n=top_n,
+            api_key=config.dashscope_api_key,
+        )
+        if response.status_code != HTTPStatus.OK:
+            logger.warning(f"精排调用失败，退化为使用原始检索顺序: {response.message}")
+            return docs[:top_n]
+
+        reranked = [docs[result.index] for result in response.output.results]
+        scores = [round(result.relevance_score, 3) for result in response.output.results]
+        logger.info(f"精排完成: {len(docs)} -> {len(reranked)} 篇，分数: {scores}")
+        return reranked
+    except Exception as e:
+        logger.warning(f"精排调用异常，退化为使用原始检索顺序: {e}")
+        return docs[:top_n]
+
+
 @tool(response_format="content_and_artifact")
 def retrieve_knowledge(query: str) -> Tuple[str, List[Document]]:
     """从知识库中检索相关信息来回答问题
@@ -111,6 +147,11 @@ def retrieve_knowledge(query: str) -> Tuple[str, List[Document]]:
         if not docs:
             logger.warning("未检索到相关文档")
             return "没有找到相关信息。", []
+
+        logger.info(f"多角度检索去重后共 {len(docs)} 个候选文档，开始精排")
+
+        # 精排：从候选池里挑出真正最相关的 top_k 篇
+        docs = _rerank_documents(query, docs, top_n=config.rag_top_k)
 
         # 格式化文档为上下文
         context = format_docs(docs)
