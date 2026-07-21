@@ -8,12 +8,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.store.sqlite.aio import AsyncSqliteStore
 import os
 
 from app.config import config
 from loguru import logger
 from app.api import chat, health, file, aiops, usage
 from app.core.milvus_client import milvus_manager
+from app.services.rag_agent_service import rag_agent_service
+from app.services.aiops_service import aiops_service
 
 
 @asynccontextmanager
@@ -30,15 +34,28 @@ async def lifespan(app: FastAPI):
     logger.info("🔌 正在连接 Milvus...")
     milvus_manager.connect()
     logger.info("✅ Milvus 连接成功")
-    
-    logger.info("=" * 60)
-    
-    yield
-    
-    # 关闭时执行
-    logger.info("🔌 正在关闭 Milvus 连接...")
-    milvus_manager.close()
-    logger.info(f"👋 {config.app_name} 关闭")
+
+    # 短期记忆（会话历史）+ 长期记忆（跨会话记忆）持久化，用 SQLite 落盘，服务重启不丢失
+    logger.info("🔌 正在初始化记忆存储（SQLite）...")
+    async with (
+        AsyncSqliteSaver.from_conn_string("./checkpoints.db") as checkpointer,
+        AsyncSqliteStore.from_conn_string("./long_term_memory.db") as store,
+    ):
+        await checkpointer.setup()
+        await store.setup()
+
+        rag_agent_service.configure_memory(checkpointer, store)
+        aiops_service.configure_checkpointer(checkpointer)
+        logger.info("✅ 记忆存储初始化完成")
+
+        logger.info("=" * 60)
+
+        yield
+
+        # 关闭时执行
+        logger.info("🔌 正在关闭 Milvus 连接...")
+        milvus_manager.close()
+        logger.info(f"👋 {config.app_name} 关闭")
 
 
 # 创建 FastAPI 应用

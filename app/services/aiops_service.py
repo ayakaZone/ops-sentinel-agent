@@ -5,7 +5,6 @@
 
 from typing import AsyncGenerator, Dict, Any
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
 from loguru import logger
 
 from app.agent.aiops import PlanExecuteState, planner, executor, replanner
@@ -23,10 +22,25 @@ class AIOpsService:
     """通用 Plan-Execute-Replan 服务"""
 
     def __init__(self):
-        """初始化服务"""
-        self.checkpointer = MemorySaver()
-        self.graph = self._build_graph()
+        """初始化服务
+
+        短期记忆（会话历史）持久化实例由应用启动时 configure_checkpointer() 注入，
+        在此之前 checkpointer/graph 都是 None——正常运行时 FastAPI lifespan 会在
+        收到第一个请求之前完成注入。
+        """
+        self.checkpointer = None
+        self.graph = None
         logger.info("Plan-Execute-Replan Service 初始化完成")
+
+    def configure_checkpointer(self, checkpointer):
+        """
+        注入持久化的短期记忆存储（由 main.py 的 lifespan 在应用启动时调用）
+
+        Args:
+            checkpointer: 短期记忆（会话历史）持久化实例，如 AsyncSqliteSaver
+        """
+        self.checkpointer = checkpointer
+        self.graph = self._build_graph()
 
     def _build_graph(self):
         """构建 Plan-Execute-Replan 工作流"""

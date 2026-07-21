@@ -33,7 +33,7 @@ async def get_usage(session_id: str):
     """
     try:
         data = {
-            "session_token_usage": rag_agent_service.get_session_token_usage(session_id),
+            "session_token_usage": await rag_agent_service.get_session_token_usage(session_id),
             "daily_calls": {
                 "chat": _build_daily_usage("chat", config.daily_chat_limit),
                 "aiops": _build_daily_usage("aiops", config.daily_aiops_limit),

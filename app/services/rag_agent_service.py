@@ -4,10 +4,12 @@
 支持真正的流式输出和更好的模型适配。
 """
 
+import uuid
 from typing import Annotated, Any, AsyncGenerator, Dict, Sequence
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import SummarizationMiddleware, before_model
+from langchain.tools import ToolRuntime, tool
 from langchain_core.messages import (
     BaseMessage,
     HumanMessage,
@@ -15,7 +17,6 @@ from langchain_core.messages import (
     SystemMessage,
 )
 from langchain_core.messages.utils import count_tokens_approximately
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.message import REMOVE_ALL_MESSAGES, add_messages
 from langgraph.runtime import Runtime
 from loguru import logger
@@ -40,6 +41,25 @@ from app.services.usage_tracker import daily_usage_counter
 class AgentState(TypedDict):
     """Agent 状态"""
     messages: Annotated[Sequence[BaseMessage], add_messages]
+
+
+# 模拟用户身份的固定值，仅用于验证"跨会话也能读到长期记忆"这个机制本身；
+# 项目没有登录体系，没有真实稳定的用户 ID 可用。生产环境应替换成真实登录用户的 user_id，
+# 让每个用户的长期记忆落在各自独立的命名空间下。
+FIXED_MEMORY_KEY = "demo_user"
+MEMORY_NAMESPACE = ("memories", FIXED_MEMORY_KEY)
+
+
+@tool
+async def save_memory(memory: str, runtime: ToolRuntime) -> str:
+    """当用户提到自己的习惯、偏好、关注点等值得长期记住的信息时，调用这个工具保存下来
+
+    Args:
+        memory: 要保存的记忆内容，用简洁的一句话概括
+    """
+    await runtime.store.aput(MEMORY_NAMESPACE, str(uuid.uuid4()), {"content": memory})
+    logger.info(f"保存长期记忆: {memory}")
+    return "已经记住这条信息了"
 
 
 @before_model
@@ -110,20 +130,35 @@ class RagAgentService:
             streaming=streaming,
         )
 
-        # 定义基础工具（与 AIOps Planner/Executor 使用同一套默认本地工具）
-        self.tools = list(DEFAULT_LOCAL_AGENT_TOOLS)
+        # 定义基础工具（与 AIOps Planner/Executor 共用的本地工具 + 仅对话 Agent 专属的长期记忆工具）
+        self.tools = list(DEFAULT_LOCAL_AGENT_TOOLS) + [save_memory]
 
         # MCP 客户端（延迟初始化，使用全局管理）
         self.mcp_tools: list = []
 
-        # 创建内存检查点（用于会话管理）
-        self.checkpointer = MemorySaver()
+        # 短期记忆（会话历史）+ 长期记忆（跨会话记忆），由应用启动时 configure_memory() 注入，
+        # 在此之前是 None——正常运行时 FastAPI lifespan 会在收到第一个请求之前完成注入
+        self.checkpointer = None
+        self.store = None
 
         # Agent 初始化（会在异步方法中完成）
         self.agent = None
         self._agent_initialized = False
 
         logger.info(f"RAG Agent 服务初始化完成 (ChatQwen), model={self.model_name}, streaming={streaming}")
+
+    def configure_memory(self, checkpointer, store):
+        """
+        注入持久化的短期/长期记忆存储（由 main.py 的 lifespan 在应用启动时调用）
+
+        Args:
+            checkpointer: 短期记忆（会话历史）持久化实例，如 AsyncSqliteSaver
+            store: 长期记忆（跨会话记忆）持久化实例，如 AsyncSqliteStore
+        """
+        self.checkpointer = checkpointer
+        self.store = store
+        # 记忆存储换了，之前用旧 checkpointer/store 构建的 agent 需要重新构建
+        self._agent_initialized = False
 
     async def _initialize_agent(self):
         """异步初始化 Agent（包括 MCP 工具）"""
@@ -155,6 +190,7 @@ class RagAgentService:
             self.model,
             tools=all_tools,
             checkpointer=self.checkpointer,
+            store=self.store,
             # trim_messages_middleware：旧的硬截断方案，已弃用（见函数上的 @deprecated 说明），保留代码不启用
             # middleware=[trim_messages_middleware],
             middleware=[
@@ -193,6 +229,8 @@ class RagAgentService:
             2. 当需要获取实时信息或专业知识时，主动使用相关工具
             3. 基于工具返回的结果提供准确、专业的回答
             4. 如果工具无法提供足够信息，请诚实地告知用户
+            5. 当用户提到自己的习惯、偏好、长期关注的问题等值得记住的信息时，
+               主动调用 save_memory 工具保存下来，方便以后的对话里回忆起来
 
             回答要求:
             - 保持友好、专业的语气
@@ -202,6 +240,25 @@ class RagAgentService:
 
             请根据用户的问题，灵活使用可用工具，提供高质量的帮助。
         """).strip()
+
+    async def _get_memory_context(self) -> str:
+        """
+        检索长期记忆，格式化成可以直接拼进系统提示词的文本
+
+        每次对话开始前无条件执行（不是让 Agent 自己决定要不要查），
+        这样才能保证有相关记忆时一定会被用上，不依赖模型主动调用工具去查。
+        """
+        if not self.store:
+            return ""
+        try:
+            memories = await self.store.asearch(MEMORY_NAMESPACE)
+            if not memories:
+                return ""
+            memory_lines = "\n".join(f"- {m.value.get('content', '')}" for m in memories)
+            return f"\n\n以下是关于用户的历史记忆，如果相关请参考：\n{memory_lines}"
+        except Exception as e:
+            logger.warning(f"检索长期记忆失败: {e}")
+            return ""
 
     async def query(
         self,
@@ -223,9 +280,10 @@ class RagAgentService:
 
             logger.info(f"[会话 {session_id}] RAG Agent 收到查询（非流式）: {question}")
 
-            # 构建消息列表（系统提示 + 用户问题）
+            # 构建消息列表（系统提示 + 长期记忆 + 用户问题）
+            memory_context = await self._get_memory_context()
             messages = [
-                SystemMessage(content=self.system_prompt),
+                SystemMessage(content=self.system_prompt + memory_context),
                 HumanMessage(content=question)
             ]
 
@@ -295,9 +353,10 @@ class RagAgentService:
 
             logger.info(f"[会话 {session_id}] RAG Agent 收到查询（流式）: {question}")
 
-            # 构建消息列表（系统提示 + 用户问题）
+            # 构建消息列表（系统提示 + 长期记忆 + 用户问题）
+            memory_context = await self._get_memory_context()
             messages = [
-                SystemMessage(content=self.system_prompt),
+                SystemMessage(content=self.system_prompt + memory_context),
                 HumanMessage(content=question)
             ]
 
@@ -348,7 +407,7 @@ class RagAgentService:
             )
             yield {"type": "error", "data": detail}
 
-    def _get_raw_session_messages(self, session_id: str) -> list:
+    async def _get_raw_session_messages(self, session_id: str) -> list:
         """
         从 checkpointer 读取某个会话的原始 LangChain 消息对象列表（内部共用方法）
 
@@ -358,11 +417,12 @@ class RagAgentService:
         Returns:
             list: 原始消息对象列表（BaseMessage 子类），无历史时返回空列表
         """
-        # 使用 checkpointer 的 get_tuple 方法获取最新的检查点
-        # （get_tuple 才会返回带 .checkpoint 属性的 CheckpointTuple；
+        # 使用 checkpointer 的 aget_tuple 方法获取最新的检查点（异步版本，AsyncSqliteSaver
+        # 要求在主线程/事件循环里必须用异步接口，同步的 get_tuple() 会直接报错）
+        # （get_tuple/aget_tuple 才会返回带 .checkpoint 属性的 CheckpointTuple；
         #  get() 直接返回原始 dict，之前误按 CheckpointTuple 的结构解析导致 KeyError）
         config_dict = {"configurable": {"thread_id": session_id}}
-        checkpoint_tuple = self.checkpointer.get_tuple(config_dict)
+        checkpoint_tuple = await self.checkpointer.aget_tuple(config_dict)
 
         if not checkpoint_tuple:
             return []
@@ -370,9 +430,9 @@ class RagAgentService:
         checkpoint_data = checkpoint_tuple.checkpoint
         return checkpoint_data.get("channel_values", {}).get("messages", [])
 
-    def get_session_history(self, session_id: str) -> list:
+    async def get_session_history(self, session_id: str) -> list:
         """
-        获取会话历史（从 MemorySaver checkpointer 中读取）
+        获取会话历史（从持久化 checkpointer 中读取）
 
         Args:
             session_id: 会话ID（即 thread_id）
@@ -381,7 +441,7 @@ class RagAgentService:
             list: 消息历史列表 [{"role": "user|assistant", "content": "...", "timestamp": "..."}]
         """
         try:
-            messages = self._get_raw_session_messages(session_id)
+            messages = await self._get_raw_session_messages(session_id)
 
             if not messages:
                 logger.info(f"获取会话历史: {session_id}, 消息数量: 0")
@@ -420,7 +480,7 @@ class RagAgentService:
             logger.error(f"获取会话历史失败: {session_id}, 错误: {e}")
             return []
 
-    def get_session_token_usage(self, session_id: str) -> dict:
+    async def get_session_token_usage(self, session_id: str) -> dict:
         """
         获取当前会话历史消息的 token 用量（近似值）
 
@@ -436,7 +496,7 @@ class RagAgentService:
         """
         limit = config.context_summary_trigger_tokens
         try:
-            messages = self._get_raw_session_messages(session_id)
+            messages = await self._get_raw_session_messages(session_id)
             used = count_tokens_approximately(messages, use_usage_metadata_scaling=True) if messages else 0
             percent = round(used / limit * 100, 1) if limit else 0.0
             return {"used": used, "limit": limit, "percent": percent}
@@ -444,9 +504,9 @@ class RagAgentService:
             logger.error(f"获取会话 token 用量失败: {session_id}, 错误: {e}")
             return {"used": 0, "limit": limit, "percent": 0.0}
 
-    def clear_session(self, session_id: str) -> bool:
+    async def clear_session(self, session_id: str) -> bool:
         """
-        清空会话历史（从 MemorySaver checkpointer 中删除）
+        清空会话历史（从持久化 checkpointer 中删除）
 
         Args:
             session_id: 会话ID（即 thread_id）
@@ -455,12 +515,12 @@ class RagAgentService:
             bool: 是否成功
         """
         try:
-            # 使用 checkpointer 的 delete_thread 方法删除该 thread 的所有检查点
-            self.checkpointer.delete_thread(session_id)
-            
+            # 使用 checkpointer 的 adelete_thread 方法删除该 thread 的所有检查点（异步版本）
+            await self.checkpointer.adelete_thread(session_id)
+
             logger.info(f"已清除会话历史: {session_id}")
             return True
-            
+
         except Exception as e:
             logger.error(f"清空会话历史失败: {session_id}, 错误: {e}")
             return False
