@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 from loguru import logger
 
 from app.services.document_cleaner_service import document_cleaner_service
+from app.services.document_loader_service import document_loader_service
 from app.services.document_splitter_service import document_splitter_service
 from app.services.vector_store_manager import vector_store_manager
 
@@ -89,7 +90,12 @@ class VectorIndexService:
             result.directory_path = str(dir_path)
 
             # 获取所有支持的文件
-            files = list(dir_path.glob("*.txt")) + list(dir_path.glob("*.md"))
+            files = (
+                list(dir_path.glob("*.txt"))
+                + list(dir_path.glob("*.md"))
+                + list(dir_path.glob("*.pdf"))
+                + list(dir_path.glob("*.docx"))
+            )
 
             if not files:
                 logger.warning(f"目录中没有找到支持的文件: {target_path}")
@@ -148,8 +154,8 @@ class VectorIndexService:
         logger.info(f"开始索引文件: {path}")
 
         try:
-            # 1. 读取文件内容
-            content = path.read_text(encoding="utf-8")
+            # 1. 读取文件内容（按扩展名分发：.md/.txt 直接读，.pdf/.docx 各自用专门的加载器）
+            content = document_loader_service.load(str(path))
             logger.info(f"读取文件: {path}, 内容长度: {len(content)} 字符")
 
             # 2. 清洗文本（Unicode规范化/去不可见字符/去页眉页脚/段落去重）
