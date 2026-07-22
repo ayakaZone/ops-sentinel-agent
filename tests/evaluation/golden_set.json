@@ -19,5 +19,50 @@
   {"query": "内存占用过高会不会拖慢服务响应速度", "expected_file": "memory_high_usage.md"},
   {"query": "为什么服务器负载会突然飙升", "expected_file": "cpu_high_usage.md"},
   {"query": "存储空间告警要怎么和内存告警区分开处理", "expected_file": "disk_high_usage.md"},
-  {"query": "怎么判断是网络问题还是应用本身的问题导致故障", "expected_file": "service_unavailable.md"}
+  {"query": "怎么判断是网络问题还是应用本身的问题导致故障", "expected_file": "service_unavailable.md"},
+
+  {"query": "服务间调用延迟突然变高怎么排查", "expected_file": "network_latency_high.md"},
+  {"query": "接口响应变慢是不是网络问题导致的", "expected_file": "network_latency_high.md"},
+
+  {"query": "消息队列堆积了大量未处理消息怎么办", "expected_file": "mq_backlog.md"},
+  {"query": "下游业务数据处理延迟是不是队列积压导致的", "expected_file": "mq_backlog.md"},
+
+  {"query": "域名解析失败导致服务调用不了怎么处理", "expected_file": "dns_resolution_failure.md"},
+  {"query": "服务大面积报错是不是DNS出问题了", "expected_file": "dns_resolution_failure.md"},
+
+  {"query": "慢SQL导致数据库连接数暴涨怎么处理", "expected_file": "slow_query_connection_surge.md"},
+  {"query": "接口大量超时是不是数据库连接不够用了", "expected_file": "slow_query_connection_surge.md"},
+
+  {"query": "数据库连接池被打满了怎么排查", "expected_file": "db_pool_exhausted.docx"},
+  {"query": "新请求获取不到数据库连接怎么办", "expected_file": "db_pool_exhausted.docx"},
+
+  {"query": "线程池打满导致请求排队怎么处理", "expected_file": "thread_pool_exhausted.docx"},
+  {"query": "服务大量线程阻塞是不是CPU太高了", "expected_file": "thread_pool_exhausted.docx"},
+
+  {"query": "容器因为内存超限被杀掉了怎么排查", "expected_file": "container_oom_killed.docx"},
+  {"query": "容器反复重启是不是内存泄漏导致的", "expected_file": "container_oom_killed.docx"},
+
+  {"query": "负载均衡健康检查失败节点被剔除了怎么办", "expected_file": "lb_node_evicted.docx"},
+  {"query": "集群里某个节点频繁被摘掉是什么原因", "expected_file": "lb_node_evicted.docx"},
+
+  {"query": "文件句柄耗尽报错too many open files怎么处理", "expected_file": "file_descriptor_exhausted.docx"},
+  {"query": "大量网络连接处于CLOSE_WAIT状态是什么问题", "expected_file": "file_descriptor_exhausted.docx"},
+
+  {"query": "JVM GC停顿时间过长怎么优化", "expected_file": "gc_pause_high.pdf"},
+  {"query": "应用出现明显的响应毛刺是不是垃圾回收导致的", "expected_file": "gc_pause_high.pdf"},
+
+  {"query": "磁盘IO利用率过高怎么排查", "expected_file": "disk_io_bottleneck.pdf"},
+  {"query": "数据库读写变慢是不是磁盘瓶颈", "expected_file": "disk_io_bottleneck.pdf"},
+
+  {"query": "缓存命中率突然下降了怎么处理", "expected_file": "cache_hit_rate_low.pdf"},
+  {"query": "大量请求穿透到数据库是不是缓存失效了", "expected_file": "cache_hit_rate_low.pdf"},
+
+  {"query": "网关限流触发导致请求被拒绝怎么办", "expected_file": "api_gateway_throttled.pdf"},
+  {"query": "部分用户请求返回错误是不是被限流了", "expected_file": "api_gateway_throttled.pdf"},
+
+  {"query": "HTTPS证书过期导致连接失败怎么处理", "expected_file": "cert_expired.pdf"},
+  {"query": "客户端连接不上服务是不是证书出问题了", "expected_file": "cert_expired.pdf"},
+
+  {"query": "定时任务执行超时怎么排查", "expected_file": "cron_job_timeout.pdf"},
+  {"query": "凌晨批量任务时间点CPU突然升高是什么原因", "expected_file": "cron_job_timeout.pdf"}
 ]
