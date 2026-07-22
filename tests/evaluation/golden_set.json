@@ -1,0 +1,23 @@
+[
+  {"query": "CPU 占用率一直很高应该怎么处理", "expected_file": "cpu_high_usage.md"},
+  {"query": "定时任务导致 CPU 周期性升高要怎么排查", "expected_file": "cpu_high_usage.md"},
+  {"query": "怀疑是死循环导致 CPU 飙升，有什么特征", "expected_file": "cpu_high_usage.md"},
+  {"query": "磁盘空间不足了要怎么排查", "expected_file": "disk_high_usage.md"},
+  {"query": "Docker 镜像占用太多磁盘空间怎么清理", "expected_file": "disk_high_usage.md"},
+  {"query": "怎么查看哪个目录占用磁盘最大", "expected_file": "disk_high_usage.md"},
+  {"query": "内存持续增长，怀疑内存泄漏怎么定位", "expected_file": "memory_high_usage.md"},
+  {"query": "JVM 内存参数配置不合理会有什么表现", "expected_file": "memory_high_usage.md"},
+  {"query": "怎么生成堆转储文件排查内存问题", "expected_file": "memory_high_usage.md"},
+  {"query": "服务突然访问不了了要怎么应急处理", "expected_file": "service_unavailable.md"},
+  {"query": "数据库连接失败导致服务不可用怎么排查", "expected_file": "service_unavailable.md"},
+  {"query": "服务故障恢复后需不需要做复盘", "expected_file": "service_unavailable.md"},
+  {"query": "接口响应很慢是什么原因导致的", "expected_file": "slow_response.md"},
+  {"query": "缓存穿透会导致响应变慢吗", "expected_file": "slow_response.md"},
+  {"query": "外部 API 调用超时导致响应慢怎么处理", "expected_file": "slow_response.md"},
+  {"query": "系统资源不够会不会导致接口响应变慢", "expected_file": "slow_response.md"},
+  {"query": "服务不可用是不是因为资源耗尽导致的", "expected_file": "service_unavailable.md"},
+  {"query": "内存占用过高会不会拖慢服务响应速度", "expected_file": "memory_high_usage.md"},
+  {"query": "为什么服务器负载会突然飙升", "expected_file": "cpu_high_usage.md"},
+  {"query": "存储空间告警要怎么和内存告警区分开处理", "expected_file": "disk_high_usage.md"},
+  {"query": "怎么判断是网络问题还是应用本身的问题导致故障", "expected_file": "service_unavailable.md"}
+]
