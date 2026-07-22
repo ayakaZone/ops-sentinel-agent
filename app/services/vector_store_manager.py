@@ -1,5 +1,6 @@
 """向量存储管理器 - 封装 Milvus VectorStore 操作"""
 
+from pathlib import Path
 from typing import List
 
 from langchain_core.documents import Document
@@ -105,11 +106,14 @@ class VectorStoreManager:
         try:
             # 使用 milvus_manager 获取已连接的 collection
             collection = milvus_manager.get_collection()
-            
-            # metadata 是 JSON 字段，使用 JSON 路径查询语法
-            # _source 是文档的来源文件路径
-            expr = f'metadata["_source"] == "{file_path}"'
-            
+
+            # 按文件名匹配，不按完整路径匹配——完整路径里带着项目目录名，
+            # 项目改名/索引目录调整（uploads -> aiops-docs）都会让路径字符串变化，
+            # 导致这里精确匹配不到旧记录，旧片段变成永久删不掉的孤儿数据（实测踩过）。
+            # 文件名在同一个知识库目录下具备唯一性，按文件名匹配更稳。
+            file_name = Path(file_path).name
+            expr = f'metadata["_file_name"] == "{file_name}"'
+
             result = collection.delete(expr)
             deleted_count = result.delete_count if hasattr(result, "delete_count") else 0
             
