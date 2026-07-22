@@ -126,6 +126,9 @@ python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
+markers = [
+    "integration: 依赖真实外部服务（Milvus/DashScope）才能跑，本地手动执行，CI 默认跳过",
+]
 
 [tool.coverage.run]
 source = ["app"]
