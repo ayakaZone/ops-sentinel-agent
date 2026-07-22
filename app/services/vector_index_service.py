@@ -63,7 +63,7 @@ class VectorIndexService:
 
     def __init__(self):
         """初始化向量索引服务"""
-        self.upload_path = "./uploads"
+        self.upload_path = "./aiops-docs"
         logger.info("向量索引服务初始化完成")
 
     def index_directory(self, directory_path: Optional[str] = None) -> IndexingResult:
@@ -71,7 +71,7 @@ class VectorIndexService:
         索引指定目录下的所有文件
 
         Args:
-            directory_path: 目录路径（可选，默认使用配置的上传目录）
+            directory_path: 目录路径（可选，默认使用知识库目录 aiops-docs）
 
         Returns:
             IndexingResult: 索引结果

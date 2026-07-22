@@ -10,8 +10,8 @@ from loguru import logger
 
 router = APIRouter()
 
-# 文件上传后存储的路径
-UPLOAD_DIR = Path("./uploads")
+# 文件上传后存储的路径（跟知识库源目录合一，上传即入库，一并纳入 git 跟踪）
+UPLOAD_DIR = Path("./aiops-docs")
 # 支持的文件类型
 ALLOWED_EXTENSIONS = ["txt", "md", "pdf", "docx"]
 # 单个文件支持最大大小
@@ -103,13 +103,13 @@ async def index_directory(directory_path: str = None):
     索引指定目录下的所有文件
 
     Args:
-        directory_path: 目录路径（可选，默认使用 uploads 目录）
+        directory_path: 目录路径（可选，默认使用知识库目录 aiops-docs）
 
     Returns:
         JSONResponse: 索引结果
     """
     try:
-        logger.info(f"开始索引目录: {directory_path or 'uploads'}")
+        logger.info(f"开始索引目录: {directory_path or 'aiops-docs'}")
 
         # 执行索引
         result = vector_index_service.index_directory(directory_path)

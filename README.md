@@ -218,10 +218,9 @@ ops-sentinel-agent/
 │   ├── cls_server.py                       # CLS 日志查询服务
 │   ├── monitor_server.py                   # 监控数据服务
 │   └── README.md                           # MCP 服务说明
-├── aiops-docs/                             # 运维知识库（Markdown 文档）
+├── aiops-docs/                             # 运维知识库（md/pdf/docx），也是文件上传的落地目录，随 git 一并跟踪
 ├── logs/                                   # 日志目录（Loguru 自动创建）
 │   └── app_YYYY-MM-DD.log                  # 按天轮转的日志文件
-├── uploads/                                # 上传文件临时目录
 ├── volumes/                                # Milvus 数据持久化目录
 ├── .env                                    # 环境变量配置（需手动创建）
 ├── Makefile                                # 项目管理命令（Linux/macOS）

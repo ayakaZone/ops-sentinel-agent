@@ -604,7 +604,7 @@ clean:  ## 清理临时文件
 	rm -f server.pid server.log
 	rm -f mcp_cls.pid mcp_cls.log
 	rm -f mcp_monitor.pid mcp_monitor.log
-	rm -rf uploads/*.tmp 2>/dev/null || true
+	rm -rf aiops-docs/*.tmp 2>/dev/null || true
 	@echo "$(GREEN)✅ 清理完成$(NC)"
 
 shell:  ## 启动 Python shell
