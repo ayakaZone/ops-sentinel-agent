@@ -42,13 +42,16 @@ class DocumentSplitterService:
             f"overlap={self.chunk_overlap}"
         )
 
-    def split_markdown(self, content: str, file_path: str = "") -> List[Document]:
+    def split_markdown(
+        self, content: str, file_path: str = "", content_hash: str = ""
+    ) -> List[Document]:
         """
         分割 Markdown 文档 (两阶段分割 + 合并小片段)
 
         Args:
             content: Markdown 内容
             file_path: 文件路径 (用于元数据)
+            content_hash: 清洗后文本的内容哈希 (用于增量索引判断文件变没变)
 
         Returns:
             List[Document]: 文档分片列表
@@ -72,6 +75,10 @@ class DocumentSplitterService:
                 doc.metadata["_source"] = file_path
                 doc.metadata["_extension"] = ".md"
                 doc.metadata["_file_name"] = Path(file_path).name
+                # 一篇文档会被切成好几个分片，这里给每个分片都写同一个 content_hash，
+                # 是故意的冗余——查询时任意一个分片都能拿到这篇文档当前的哈希值，
+                # 不需要额外单独记一份"文档级别"的元信息。
+                doc.metadata["_content_hash"] = content_hash
 
             logger.info(f"Markdown 分割完成: {file_path} -> {len(final_docs)} 个分片")
             return final_docs
@@ -80,13 +87,16 @@ class DocumentSplitterService:
             logger.error(f"Markdown 分割失败: {file_path}, 错误: {e}")
             raise
 
-    def split_text(self, content: str, file_path: str = "") -> List[Document]:
+    def split_text(
+        self, content: str, file_path: str = "", content_hash: str = ""
+    ) -> List[Document]:
         """
         分割普通文本文档
 
         Args:
             content: 文本内容
             file_path: 文件路径 (用于元数据)
+            content_hash: 清洗后文本的内容哈希 (用于增量索引判断文件变没变)
 
         Returns:
             List[Document]: 文档分片列表
@@ -104,6 +114,7 @@ class DocumentSplitterService:
                         "_source": file_path,
                         "_extension": Path(file_path).suffix,
                         "_file_name": Path(file_path).name,
+                        "_content_hash": content_hash,
                     }
                 ],
             )
@@ -115,21 +126,24 @@ class DocumentSplitterService:
             logger.error(f"文本分割失败: {file_path}, 错误: {e}")
             raise
 
-    def split_document(self, content: str, file_path: str = "") -> List[Document]:
+    def split_document(
+        self, content: str, file_path: str = "", content_hash: str = ""
+    ) -> List[Document]:
         """
         智能分割文档 (根据文件类型选择分割器)
 
         Args:
             content: 文档内容
             file_path: 文件路径
+            content_hash: 清洗后文本的内容哈希 (用于增量索引判断文件变没变)
 
         Returns:
             List[Document]: 文档分片列表
         """
         if file_path.endswith(".md"):
-            return self.split_markdown(content, file_path)
+            return self.split_markdown(content, file_path, content_hash)
         else:
-            return self.split_text(content, file_path)
+            return self.split_text(content, file_path, content_hash)
 
     def _merge_small_chunks(
         self, documents: List[Document], min_size: int = 300
