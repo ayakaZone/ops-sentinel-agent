@@ -3,15 +3,21 @@
 使用 Pydantic Settings 实现类型安全的配置管理
 """
 
+from pathlib import Path
 from typing import Dict, Any
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# config.py 在 app/ 目录下，上一级就是项目根目录；用 __file__ 动态推算，
+# 不管从哪个工作目录启动进程（命令行 cd 到子目录 / IDE 默认按脚本所在目录运行），
+# .env 都能被正确找到，不依赖当前工作目录
+BASE_DIR = Path(__file__).resolve().parent.parent
 
 
 class Settings(BaseSettings):
     """应用配置"""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=BASE_DIR / ".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
