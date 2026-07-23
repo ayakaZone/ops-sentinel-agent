@@ -230,8 +230,12 @@ class VectorIndexService:
             content = document_loader_service.load(str(path))
             logger.info(f"读取文件: {path}, 内容长度: {len(content)} 字符")
 
-            # 2. 清洗文本（Unicode规范化/去不可见字符/去页眉页脚/段落去重）
-            content = document_cleaner_service.clean(content)
+            # 2. 清洗文本。把扩展名一起交给清洗器：只有 PDF 才运行
+            #    “按页面位置去页眉页脚”的专用逻辑；Markdown/TXT/DOCX 只做通用清洗。
+            content = document_cleaner_service.clean(
+                content,
+                file_extension=path.suffix.lower(),
+            )
             logger.info(f"文本清洗完成: {path}, 清洗后长度: {len(content)} 字符")
 
             # 3. 增量判断：算出这份清洗后内容的哈希值，跟 Milvus 里已存的比对。

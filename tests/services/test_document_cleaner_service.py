@@ -6,6 +6,7 @@
 """
 
 from app.services.document_cleaner_service import document_cleaner_service
+from app.services.document_loader_service import PDF_PAGE_SEPARATOR
 
 
 def test_clean_empty_text_returns_as_is():
@@ -36,19 +37,23 @@ def test_clean_collapses_excessive_newlines():
     assert result == "第一段\n\n第二段"
 
 
-def test_clean_removes_header_repeated_only_twice():
+def test_clean_removes_repeated_pdf_header_and_footer():
     """
-    回归测试：min_repeat 默认值曾经是 3，导致一份只有 2 页（页眉只重复 2 次）
-    的短文档页眉完全清不掉。这里模拟一份 2 页文档验证页眉确实被清理。
+    两页 PDF 的页眉页脚也应该被清理。
+
+    这里必须使用 PDF_PAGE_SEPARATOR 模拟真实 PDF 的页面边界：新算法不再根据
+    “全文重复两次”删除文本，而是根据“每页顶部/底部重复”删除文本。
     """
-    text = (
-        "运维手册 v1.0\n"  # 页眉，重复 2 次
-        "第一页正文内容，介绍系统架构。\n\n"
-        "运维手册 v1.0\n"  # 页眉第二次出现
-        "第二页正文内容，介绍部署流程。"
+    text = PDF_PAGE_SEPARATOR.join(
+        [
+            "运维手册 v1.0\n第一页正文内容，介绍系统架构。\n第 1 页",
+            "运维手册 v1.0\n第二页正文内容，介绍部署流程。\n第 2 页",
+        ]
     )
-    result = document_cleaner_service.clean(text)
+    result = document_cleaner_service.clean(text, file_extension=".pdf")
     assert "运维手册 v1.0" not in result
+    assert "第 1 页" not in result
+    assert "第 2 页" not in result
     assert "第一页正文内容" in result
     assert "第二页正文内容" in result
 
@@ -73,6 +78,50 @@ def test_clean_deduplicates_repeated_multiline_paragraph():
     result = document_cleaner_service.clean(text)
     assert result.count("重复内容第一行") == 1
     assert "独有内容" in result
+
+
+def test_clean_preserves_repeated_markdown_tool_names():
+    """重复工具名属于 Runbook 正文，Markdown 清洗时不能删除。"""
+    text = (
+        "## 步骤一\n**工具**: `query_logs`\n\n"
+        "## 步骤二\n**工具**: `query_logs`"
+    )
+    result = document_cleaner_service.clean(text, file_extension=".md")
+    assert result.count("`query_logs`") == 2
+
+
+def test_clean_preserves_markdown_code_fences():
+    """多个代码块的 ``` / ```bash 会重复出现，但它们是有效 Markdown 语法。"""
+    text = (
+        "示例一：\n```bash\ntop\n```\n\n"
+        "示例二：\n```bash\nfree -m\n```"
+    )
+    result = document_cleaner_service.clean(text, file_extension=".md")
+    assert result.count("```bash") == 2
+    assert result.count("```") == 4
+
+
+def test_clean_preserves_repeated_pdf_body_line():
+    """正文中央的重复工具名不能因为跨页出现而被误删。"""
+    text = PDF_PAGE_SEPARATOR.join(
+        [
+            "运维手册\n第一页说明\n工具: query_logs\n第一页结尾\n第 1 页",
+            "运维手册\n第二页说明\n工具: query_logs\n第二页结尾\n第 2 页",
+        ]
+    )
+    result = document_cleaner_service.clean(text, file_extension=".pdf")
+    assert "运维手册" not in result
+    assert "第 1 页" not in result
+    assert "第 2 页" not in result
+    assert result.count("工具: query_logs") == 2
+
+
+def test_clean_preserves_non_adjacent_duplicate_paragraphs():
+    """相同段落出现在不同章节时仍可能有意义，不能做全局去重。"""
+    repeated_paragraph = "处理完成后：\n1. 观察指标\n2. 检查日志"
+    text = f"{repeated_paragraph}\n\n中间的其他章节。\n\n{repeated_paragraph}"
+    result = document_cleaner_service.clean(text, file_extension=".md")
+    assert result.count("处理完成后") == 2
 
 
 def test_clean_normalizes_line_endings():
