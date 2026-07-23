@@ -50,6 +50,11 @@ def retrieve_with_rerank(query: str, top_k: int) -> List[Document]:
     return _rerank_documents(query, candidates, top_n=top_k)
 
 
+def retrieve_with_hybrid(query: str, top_k: int) -> List[Document]:
+    """只启用“向量 + BM25 + RRF”混合召回，不做查询扩展和外部精排。"""
+    return vector_store_manager.hybrid_search(query, k=top_k)
+
+
 def retrieve_with_both(query: str, top_k: int) -> List[Document]:
     """当前生产环境 retrieve_knowledge() 的真实流程：查询扩展 + 精排"""
     queries = _expand_query(query)
@@ -89,6 +94,7 @@ def main():
         "baseline（纯向量检索）": retrieve_baseline,
         "+查询扩展（#6）": retrieve_with_expansion,
         "+精排（#2）": retrieve_with_rerank,
+        "+混合检索（向量+BM25+RRF）": retrieve_with_hybrid,
         "+查询扩展+精排（生产环境现状）": retrieve_with_both,
     }
 

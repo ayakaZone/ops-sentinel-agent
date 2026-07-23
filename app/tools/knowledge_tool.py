@@ -129,17 +129,19 @@ def retrieve_knowledge(query: str) -> Tuple[str, List[Document]]:
         # 查询改写 + 多角度扩展，得到多个用于检索的查询
         queries = _expand_query(query)
 
-        # 从向量存储中检索相关文档
-        vector_store = vector_store_manager.get_vector_store()
-        retriever = vector_store.as_retriever(
-            search_kwargs={"k": config.rag_top_k}
-        )
-
-        # 对每个查询分别检索，按文档内容去重合并（同一分片被不同角度的查询命中时只保留一份）
+        # 对每个查询变体做混合检索：
+        # 1. 稠密向量通道负责语义相近匹配；
+        # 2. BM25 通道负责错误码、命令、工具名等关键词精确匹配；
+        # 3. Milvus 使用 RRF 融合两路排名，返回更完整的候选池。
+        #
+        # rag_candidate_k 是“精排前每个查询变体的候选数”，不能直接用最终的
+        # rag_top_k，否则有价值的候选会在精排开始前被过早丢弃。
         seen_content = set()
         docs: List[Document] = []
         for q in queries:
-            for doc in retriever.invoke(q):
+            for doc in vector_store_manager.hybrid_search(
+                q, k=config.rag_candidate_k
+            ):
                 if doc.page_content not in seen_content:
                     seen_content.add(doc.page_content)
                     docs.append(doc)

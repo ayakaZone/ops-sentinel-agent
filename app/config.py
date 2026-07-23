@@ -42,6 +42,9 @@ class Settings(BaseSettings):
 
     # RAG 配置
     rag_top_k: int = 3
+    # 混合检索每个查询变体在精排前保留的候选数。最终回答仍只使用 rag_top_k 篇。
+    # 分开配置可以避免“召回阶段太早截断”，给精排留下足够的候选池。
+    rag_candidate_k: int = 6
     rag_model: str = "qwen-max"  # 使用快速响应模型，不带扩展思考
 
     # 文档分块配置

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List, Optional, Set
 
 from langchain_core.documents import Document
-from langchain_milvus import Milvus
+from langchain_milvus import BM25BuiltInFunction, Milvus
 from loguru import logger
 
 from app.config import config
@@ -14,6 +14,10 @@ from app.services.vector_embedding_service import vector_embedding_service
 
 # 统一使用 biz collection
 COLLECTION_NAME = "biz"
+DENSE_VECTOR_FIELD = "vector"
+SPARSE_VECTOR_FIELD = "sparse_vector"
+BM25_FUNCTION_NAME = "bm25_content"
+RRF_K = 60
 
 
 class VectorStoreManager:
@@ -38,8 +42,11 @@ class VectorStoreManager:
                 "port": config.milvus_port,
             }
 
-            # 创建 LangChain Milvus VectorStore
-            # 使用 biz collection，字段映射：text_field -> content, vector_field -> vector
+            # 创建“稠密向量 + BM25 稀疏向量”的混合 VectorStore。
+            #
+            # vector 是现有 DashScope Embedding 产生的 1024 维稠密向量，擅长语义匹配；
+            # sparse_vector 由 Milvus 根据 content 自动生成，擅长错误码、命令、工具名等
+            # 关键词精确匹配。两者的 RRF 融合在 hybrid_search（混合检索）中执行。
             self.vector_store = Milvus(
                 embedding_function=vector_embedding_service,
                 collection_name=self.collection_name,
@@ -47,9 +54,18 @@ class VectorStoreManager:
                 auto_id=False,  # 使用自定义 id
                 drop_old=False,
                 text_field="content",  # 文本内容存储到 content 字段
-                vector_field="vector",  # 向量存储到 vector 字段
+                vector_field=[DENSE_VECTOR_FIELD, SPARSE_VECTOR_FIELD],
                 primary_field="id",  # 主键字段
                 metadata_field="metadata",  # 元数据字段
+                # 必须与 MilvusClientManager._create_collection() 中注册的 Function
+                # 保持同名、同输入输出字段；已有 Collection 时 LangChain 会复用它，
+                # 新建 Collection 时则可按该定义创建同样的 BM25 Function。
+                builtin_function=BM25BuiltInFunction(
+                    input_field_names="content",
+                    output_field_names=SPARSE_VECTOR_FIELD,
+                    analyzer_params={"type": "chinese"},
+                    function_name=BM25_FUNCTION_NAME,
+                ),
             )
 
             logger.info(
@@ -219,7 +235,10 @@ class VectorStoreManager:
 
     def similarity_search(self, query: str, k: int = 3) -> List[Document]:
         """
-        相似度搜索
+        纯稠密向量相似度搜索（仅用于评测对照组）
+
+        生产 RAG 链路请使用 hybrid_search（混合检索）。这个方法保留为
+        "纯向量检索 baseline"，使 tests/evaluation 可以继续与混合方案做公平对比。
 
         Args:
             query: 查询文本
@@ -229,11 +248,58 @@ class VectorStoreManager:
             List[Document]: 相关文档列表
         """
         try:
-            docs = self.vector_store.similarity_search(query, k=k)
-            logger.debug(f"相似度搜索完成: query='{query}', 结果数={len(docs)}")
+            # VectorStore 同时配置两个向量字段后，直接调用 similarity_search 会自动
+            # 走混合检索；这里为了保留 baseline，显式调用底层 Collection 的 vector
+            # 字段做单路检索。用户查询只在本次请求临时向量化，不会写入 Milvus。
+            query_vector = vector_embedding_service.embed_query(query)
+            collection = milvus_manager.get_collection()
+            results = collection.search(
+                data=[query_vector],
+                anns_field=DENSE_VECTOR_FIELD,
+                param={"metric_type": "COSINE", "params": {"nprobe": 10}},
+                limit=k,
+                output_fields=["content", "metadata"],
+            )
+
+            docs = [
+                Document(
+                    page_content=hit.entity.get("content"),
+                    metadata=hit.entity.get("metadata") or {},
+                )
+                for hit in results[0]
+            ]
+            logger.debug(f"纯向量搜索完成: query='{query}', 结果数={len(docs)}")
             return docs
         except Exception as e:
             logger.error(f"相似度搜索失败: {e}")
+            return []
+
+    def hybrid_search(self, query: str, k: int = 6) -> List[Document]:
+        """执行“稠密语义检索 + BM25 关键词检索 + RRF 融合”。
+
+        Args:
+            query: 用户原始问题或查询扩展后的变体。
+            k: 两路融合后返回的候选分片数量；它是精排前的候选池大小，
+                通常应大于最终回答使用的 rag_top_k。
+
+        Returns:
+            RRF 融合排序后的候选 Document 列表。
+        """
+        try:
+            docs = self.vector_store.similarity_search(
+                query,
+                k=k,
+                # RRF 只依据“稠密检索名次”和“BM25 检索名次”融合，避免直接比较
+                # 两种含义不同、数值范围也不同的原始分数。
+                ranker_type="rrf",
+                ranker_params={"k": RRF_K},
+            )
+            logger.debug(
+                f"混合检索完成: query='{query}', RRF k={RRF_K}, 结果数={len(docs)}"
+            )
+            return docs
+        except Exception as e:
+            logger.error(f"混合检索失败: {e}")
             return []
 
 
