@@ -47,7 +47,7 @@ def retrieve_with_expansion(query: str, top_k: int) -> List[Document]:
 def retrieve_with_rerank(query: str, top_k: int) -> List[Document]:
     """只加精排，不做查询扩展——单查询先捞一个更大的候选池，交给精排收窄"""
     candidates = vector_store_manager.similarity_search(query, k=top_k * 3)
-    return _rerank_documents(query, candidates, top_n=top_k)
+    return _rerank_documents(query, candidates, top_n=top_k).documents
 
 
 def retrieve_with_hybrid(query: str, top_k: int) -> List[Document]:
@@ -64,7 +64,7 @@ def retrieve_with_both(query: str, top_k: int) -> List[Document]:
             if doc.page_content not in seen:
                 seen.add(doc.page_content)
                 docs.append(doc)
-    return _rerank_documents(query, docs, top_n=top_k)
+    return _rerank_documents(query, docs, top_n=top_k).documents
 
 
 def evaluate(golden_set: list[dict], retrieve_fn: Callable, top_k: int) -> dict:

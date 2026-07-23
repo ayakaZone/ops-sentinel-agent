@@ -1,6 +1,7 @@
 """知识检索工具 - 从向量数据库中检索相关信息"""
 
 from http import HTTPStatus
+from dataclasses import dataclass
 from textwrap import dedent
 from typing import List, Tuple
 
@@ -56,6 +57,28 @@ _expansion_llm = ChatQwen(
 _expansion_chain = expansion_prompt | _expansion_llm.with_structured_output(QueryExpansion)
 
 
+# 这不是“系统错误”，而是一次正常的检索决策：候选文档存在，但精排判断它们
+# 与用户问题不够相关。把它明确告诉 Agent，可避免模型拿无关上下文强行编造答案。
+NO_RELEVANT_KNOWLEDGE_MESSAGE = (
+    "当前知识库中没有找到足够相关且可信的资料，因此不能基于知识库给出结论。"
+    "请补充具体的告警现象、错误信息、服务名称或时间范围后再试。"
+)
+
+
+@dataclass
+class RerankOutcome:
+    """精排后的业务结果，保留分数以支持阈值判断与后续观测。
+
+    documents 和 relevance_scores 的相同下标表示同一篇文档。例如：
+    documents[0] 是第一名文档时，relevance_scores[0] 就是它的精排相关性分数。
+    精排 API 失败时，无法取得可信分数，rerank_succeeded 会是 False。
+    """
+
+    documents: List[Document]
+    relevance_scores: List[float]
+    rerank_succeeded: bool
+
+
 def _expand_query(query: str) -> List[str]:
     """
     查询改写 + 多角度扩展
@@ -77,7 +100,7 @@ def _expand_query(query: str) -> List[str]:
         return [query]
 
 
-def _rerank_documents(query: str, docs: List[Document], top_n: int) -> List[Document]:
+def _rerank_documents(query: str, docs: List[Document], top_n: int) -> RerankOutcome:
     """
     用 DashScope 精排对候选文档重新排序
 
@@ -87,12 +110,12 @@ def _rerank_documents(query: str, docs: List[Document], top_n: int) -> List[Docu
         top_n: 最终保留的文档数量
 
     Returns:
-        List[Document]: 按相关性排序、截断到 top_n 篇的文档列表；
-                        精排失败时退化为按原始检索顺序截取前 top_n 篇
+        RerankOutcome: 按相关性排序后的文档、与其一一对应的分数、以及精排是否成功。
+                       精排失败时退化为原始检索顺序，但不伪造相关性分数。
     """
     try:
         response = TextReRank.call(
-            model="gte-rerank-v2",
+            model=config.rag_rerank_model,
             query=query,
             documents=[doc.page_content for doc in docs],
             top_n=top_n,
@@ -100,15 +123,49 @@ def _rerank_documents(query: str, docs: List[Document], top_n: int) -> List[Docu
         )
         if response.status_code != HTTPStatus.OK:
             logger.warning(f"精排调用失败，退化为使用原始检索顺序: {response.message}")
-            return docs[:top_n]
+            return RerankOutcome(docs[:top_n], [], False)
 
-        reranked = [docs[result.index] for result in response.output.results]
-        scores = [round(result.relevance_score, 3) for result in response.output.results]
+        # gte-rerank-v2 的结果位于 response.output.results；当前 qwen3-rerank
+        # 则直接位于 response.results。兼容两种结构，便于历史版本平滑迁移。
+        output = getattr(response, "output", None)
+        results = getattr(output, "results", None) if output is not None else None
+        if results is None:
+            results = response.results
+
+        reranked = [docs[result.index] for result in results]
+        scores = [float(result.relevance_score) for result in results]
         logger.info(f"精排完成: {len(docs)} -> {len(reranked)} 篇，分数: {scores}")
-        return reranked
+        return RerankOutcome(reranked, scores, True)
     except Exception as e:
         logger.warning(f"精排调用异常，退化为使用原始检索顺序: {e}")
-        return docs[:top_n]
+        return RerankOutcome(docs[:top_n], [], False)
+
+
+def _filter_documents_by_relevance(rerank_outcome: RerankOutcome) -> List[Document]:
+    """按精排分数过滤文档；精排失败时不误用阈值拒答。
+
+    阈值只对“精排成功且有分数”的情况生效。否则若因网络超时、限流等原因
+    拿不到分数，不能把技术故障误判成“用户问题没有知识库答案”。
+    """
+    if not rerank_outcome.rerank_succeeded:
+        logger.warning("精排未成功，本次跳过相关性阈值过滤，使用召回降级结果")
+        return rerank_outcome.documents
+
+    relevant_docs = [
+        document
+        for document, score in zip(
+            rerank_outcome.documents, rerank_outcome.relevance_scores
+        )
+        if score >= config.rag_min_relevance_score
+    ]
+    logger.info(
+        "相关性阈值过滤完成: {} -> {} 篇，阈值: {:.2f}，分数: {}",
+        len(rerank_outcome.documents),
+        len(relevant_docs),
+        config.rag_min_relevance_score,
+        [round(score, 3) for score in rerank_outcome.relevance_scores],
+    )
+    return relevant_docs
 
 
 @tool(response_format="content_and_artifact")
@@ -152,8 +209,15 @@ def retrieve_knowledge(query: str) -> Tuple[str, List[Document]]:
 
         logger.info(f"多角度检索去重后共 {len(docs)} 个候选文档，开始精排")
 
-        # 精排：从候选池里挑出真正最相关的 top_k 篇
-        docs = _rerank_documents(query, docs, top_n=config.rag_top_k)
+        # 精排：从候选池里挑出真正最相关的 top_k 篇，同时保留分数。
+        rerank_outcome = _rerank_documents(query, docs, top_n=config.rag_top_k)
+        docs = _filter_documents_by_relevance(rerank_outcome)
+
+        # 所有候选文档都低于阈值时，明确拒绝使用这些无关上下文回答。
+        # 返回空 artifact 也能让后续 Agent 知道“没有可信来源”，而不是误以为有资料。
+        if not docs:
+            logger.info("知识库拒答: 最高精排分数未达到阈值 {:.2f}", config.rag_min_relevance_score)
+            return NO_RELEVANT_KNOWLEDGE_MESSAGE, []
 
         # 格式化文档为上下文
         context = format_docs(docs)

@@ -45,6 +45,12 @@ class Settings(BaseSettings):
     # 混合检索每个查询变体在精排前保留的候选数。最终回答仍只使用 rag_top_k 篇。
     # 分开配置可以避免“召回阶段太早截断”，给精排留下足够的候选池。
     rag_candidate_k: int = 6
+    # 精排模型会为“用户问题 + 文档切片”给出 0.0 ~ 1.0 的相关性分数。
+    # 只要最高分低于这个阈值，就不把不可靠的知识库内容交给大模型生成答案，
+    # 而是返回引导性提示，降低 RAG 幻觉风险。该值应结合后续评测与线上日志校准。
+    rag_min_relevance_score: float = 0.5
+    # gte-rerank-v2 已下线，使用 DashScope 当前推荐的文本精排模型。
+    rag_rerank_model: str = "qwen3-rerank"
     rag_model: str = "qwen-max"  # 使用快速响应模型，不带扩展思考
 
     # 文档分块配置

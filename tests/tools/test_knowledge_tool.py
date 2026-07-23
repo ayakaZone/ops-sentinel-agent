@@ -81,9 +81,30 @@ def test_rerank_documents_reorders_by_relevance(mocker):
 
     result = _rerank_documents("CPU 相关问题", docs, top_n=2)
 
-    assert len(result) == 2
-    assert result[0].page_content == "CPU 使用率过高的排查步骤"
-    assert result[1].page_content == "内存泄漏的常见原因"
+    assert result.rerank_succeeded is True
+    assert result.relevance_scores == [0.92, 0.55]
+    assert len(result.documents) == 2
+    assert result.documents[0].page_content == "CPU 使用率过高的排查步骤"
+    assert result.documents[1].page_content == "内存泄漏的常见原因"
+
+
+def test_rerank_documents_supports_qwen3_top_level_results(mocker):
+    """qwen3-rerank 的成功结果在顶层 results 中，不能仍按旧版 output.results 读取。"""
+    from app.tools.knowledge_tool import _rerank_documents
+
+    docs = [Document(page_content="无关文档"), Document(page_content="目标文档")]
+    fake_response = mocker.Mock()
+    fake_response.status_code = 200
+    # 显式设为 None，模拟 qwen3-rerank 没有 output 包装层。
+    fake_response.output = None
+    fake_response.results = [mocker.Mock(index=1, relevance_score=0.93)]
+    mocker.patch("app.tools.knowledge_tool.TextReRank.call", return_value=fake_response)
+
+    result = _rerank_documents("目标问题", docs, top_n=1)
+
+    assert result.rerank_succeeded is True
+    assert result.documents == [docs[1]]
+    assert result.relevance_scores == [0.93]
 
 
 def test_rerank_documents_falls_back_on_api_error_status(mocker):
@@ -99,7 +120,9 @@ def test_rerank_documents_falls_back_on_api_error_status(mocker):
 
     result = _rerank_documents("查询", docs, top_n=3)
 
-    assert result == docs[:3]
+    assert result.documents == docs[:3]
+    assert result.relevance_scores == []
+    assert result.rerank_succeeded is False
 
 
 def test_rerank_documents_falls_back_on_exception(mocker):
@@ -115,4 +138,30 @@ def test_rerank_documents_falls_back_on_exception(mocker):
 
     result = _rerank_documents("查询", docs, top_n=3)
 
-    assert result == docs[:3]
+    assert result.documents == docs[:3]
+    assert result.relevance_scores == []
+    assert result.rerank_succeeded is False
+
+
+def test_relevance_threshold_filters_low_score_documents():
+    """精排成功时，低于阈值的候选不能作为 RAG 上下文提供给大模型。"""
+    from app.tools.knowledge_tool import RerankOutcome, _filter_documents_by_relevance
+
+    docs = [Document(page_content="高相关"), Document(page_content="低相关")]
+    outcome = RerankOutcome(
+        documents=docs,
+        relevance_scores=[0.91, 0.24],
+        rerank_succeeded=True,
+    )
+
+    assert _filter_documents_by_relevance(outcome) == [docs[0]]
+
+
+def test_relevance_threshold_is_skipped_when_rerank_fails():
+    """没有可信分数时不能把 API 故障误判成无相关资料。"""
+    from app.tools.knowledge_tool import RerankOutcome, _filter_documents_by_relevance
+
+    docs = [Document(page_content="召回降级结果")]
+    outcome = RerankOutcome(docs, [], False)
+
+    assert _filter_documents_by_relevance(outcome) == docs
