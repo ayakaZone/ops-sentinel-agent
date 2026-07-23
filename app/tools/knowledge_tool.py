@@ -3,7 +3,7 @@
 from http import HTTPStatus
 from dataclasses import dataclass
 from textwrap import dedent
-from typing import List, Tuple
+from typing import List, Sequence, Tuple, TypedDict
 
 from dashscope import TextReRank
 from langchain_core.documents import Document
@@ -77,6 +77,17 @@ class RerankOutcome:
     documents: List[Document]
     relevance_scores: List[float]
     rerank_succeeded: bool
+
+
+class SourceReference(TypedDict):
+    """写入工作流状态的精简知识库来源。
+
+    State 会被 LangGraph 持久化，因此只保存最终展示需要的文件名和标题层级，
+    不保存完整 Document 正文，避免检查点中重复存储大段文本。
+    """
+
+    file_name: str
+    headers: List[str]
 
 
 def _expand_query(query: str) -> List[str]:
@@ -265,3 +276,57 @@ def format_docs(docs: List[Document]) -> str:
         formatted_parts.append(formatted)
 
     return "\n".join(formatted_parts)
+
+
+def build_source_references(docs: Sequence[Document]) -> List[SourceReference]:
+    """从原始 Document 提取可写入状态的精简来源记录。"""
+    source_records: List[SourceReference] = []
+    seen_sources = set()
+
+    for doc in docs:
+        metadata = doc.metadata
+        file_name = str(metadata.get("_file_name", "未知来源"))
+        headers = [
+            str(metadata[key]).strip()
+            for key in ["h1", "h2", "h3"]
+            if metadata.get(key)
+        ]
+
+        source_key = (file_name, *headers)
+        if source_key in seen_sources:
+            continue
+        seen_sources.add(source_key)
+        source_records.append({"file_name": file_name, "headers": headers})
+
+    return source_records
+
+
+def format_source_reference_records(references: Sequence[SourceReference]) -> str:
+    """将 State 中的来源记录格式化为最终回答末尾的来源清单。
+
+    同一来源可能来自多个 Planner / Executor 节点，所以在最终展示前再次去重。
+    这是一层安全兜底，确保 State 的追加式合并不会造成重复来源。
+    """
+    source_lines: List[str] = []
+    seen_sources = set()
+
+    for reference in references:
+        file_name = reference["file_name"]
+        headers = reference["headers"]
+        source_key = (file_name, *headers)
+        if source_key in seen_sources:
+            continue
+        seen_sources.add(source_key)
+
+        source_path = " > ".join([file_name, *headers])
+        source_lines.append(f"- {source_path}")
+
+    if not source_lines:
+        return ""
+
+    return "\n\n---\n### 参考来源\n\n" + "\n".join(source_lines)
+
+
+def format_source_references(docs: Sequence[Document]) -> str:
+    """根据真实检索文档生成最终回答末尾的来源清单。"""
+    return format_source_reference_records(build_source_references(docs))

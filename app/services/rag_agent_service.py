@@ -10,11 +10,13 @@ from typing import Annotated, Any, AsyncGenerator, Dict, Sequence
 from langchain.agents import create_agent
 from langchain.agents.middleware import SummarizationMiddleware, before_model
 from langchain.tools import ToolRuntime, tool
+from langchain_core.documents import Document
 from langchain_core.messages import (
     BaseMessage,
     HumanMessage,
     RemoveMessage,
     SystemMessage,
+    ToolMessage,
 )
 from langchain_core.messages.utils import count_tokens_approximately
 from langgraph.graph.message import REMOVE_ALL_MESSAGES, add_messages
@@ -25,6 +27,7 @@ from langchain_qwq import ChatQwen
 
 from app.config import config
 from app.tools import DEFAULT_LOCAL_AGENT_TOOLS
+from app.tools.knowledge_tool import format_source_references
 from app.agent.mcp_client import (
     get_mcp_client_with_retry,
     load_mcp_tools_safe,
@@ -48,6 +51,40 @@ class AgentState(TypedDict):
 # 让每个用户的长期记忆落在各自独立的命名空间下。
 FIXED_MEMORY_KEY = "demo_user"
 MEMORY_NAMESPACE = ("memories", FIXED_MEMORY_KEY)
+
+
+def _extract_current_turn_knowledge_docs(
+    messages: Sequence[BaseMessage], question: str
+) -> list[Document]:
+    """从本轮消息中提取知识检索工具返回的真实 Document artifact。
+
+    checkpointer 会保存整个会话历史，不能把历史轮次的来源追加到当前回答。
+    因此先从后向前找到本次用户问题对应的 HumanMessage，只处理它之后的
+    retrieve_knowledge ToolMessage。
+    """
+    current_turn_start = None
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if isinstance(message, HumanMessage) and message.content == question:
+            current_turn_start = index + 1
+            break
+
+    # 不能确定本轮起点时宁可不展示来源，也不能误用历史会话的来源。
+    if current_turn_start is None:
+        return []
+
+    docs: list[Document] = []
+    for message in messages[current_turn_start:]:
+        if not isinstance(message, ToolMessage) or message.name != "retrieve_knowledge":
+            continue
+
+        artifact = getattr(message, "artifact", None)
+        # retrieve_knowledge 约定 artifact 是 List[Document]；这里额外判断 list，
+        # 防止其他工具或异常返回值被误当成来源。
+        if isinstance(artifact, list):
+            docs.extend(doc for doc in artifact if isinstance(doc, Document))
+
+    return docs
 
 
 @tool
@@ -308,6 +345,13 @@ class RagAgentService:
                 last_message = messages_result[-1]
                 answer = last_message.content if hasattr(last_message, 'content') else str(last_message)
 
+                # 不依赖模型输出来源：直接从本轮知识检索工具的 artifact 生成来源清单。
+                # 没有调用知识库、检索拒答或工具异常时 docs 为空，不会显示空来源区域。
+                source_docs = _extract_current_turn_knowledge_docs(messages_result, question)
+                source_footer = format_source_references(source_docs)
+                if source_footer:
+                    answer += source_footer
+
                 # 记录工具调用
                 if hasattr(last_message, "tool_calls") and last_message.tool_calls:
                     tool_names = [tc.get("name", "unknown") for tc in last_message.tool_calls]
@@ -370,6 +414,10 @@ class RagAgentService:
                 }
             }
 
+            # 在当前 generator 生命周期内收集本轮 ToolMessage，避免从整个会话历史
+            # 读取来源，导致上一轮对话的文档被错误追加到本轮答案末尾。
+            source_docs = []
+
             async for token, metadata in self.agent.astream(
                 input=agent_input,
                 config=config_dict,
@@ -377,6 +425,13 @@ class RagAgentService:
             ):
                 node_name = metadata.get('langgraph_node', 'unknown') if isinstance(metadata, dict) else 'unknown'
                 message_type = type(token).__name__
+
+                # response_format="content_and_artifact" 会把原始 Document 列表放进
+                # ToolMessage.artifact。模型正文不会看到 artifact，但应用层可以可靠使用它。
+                if isinstance(token, ToolMessage) and token.name == "retrieve_knowledge":
+                    artifact = getattr(token, "artifact", None)
+                    if isinstance(artifact, list):
+                        source_docs.extend(artifact)
 
                 if message_type in ("AIMessage", "AIMessageChunk"):
                     content_blocks = getattr(token, 'content_blocks', None)
@@ -391,6 +446,15 @@ class RagAgentService:
                                         "data": text_content,
                                         "node": node_name
                                     }
+
+            # 模型正文输出完毕后，由程序统一补充一次真实来源，避免模型重复或伪造来源。
+            source_footer = format_source_references(source_docs)
+            if source_footer:
+                yield {
+                    "type": "content",
+                    "data": source_footer,
+                    "node": "knowledge_sources",
+                }
 
             # 软限流：超过今日调用次数阈值时，多发一段提示内容（不拦截请求）
             reminder = daily_usage_counter.increment_and_get_reminder("chat", config.daily_chat_limit)

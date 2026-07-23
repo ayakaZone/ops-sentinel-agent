@@ -165,3 +165,57 @@ def test_relevance_threshold_is_skipped_when_rerank_fails():
     outcome = RerankOutcome(docs, [], False)
 
     assert _filter_documents_by_relevance(outcome) == docs
+
+
+def test_format_source_references_deduplicates_same_file_and_section():
+    """同一文件的同一章节被多个切片命中时，回答末尾只能展示一次来源。"""
+    from app.tools.knowledge_tool import format_source_references
+
+    docs = [
+        Document(
+            page_content="同一章节的第一个切片",
+            metadata={"_file_name": "连接排查.md", "h1": "连接异常", "h2": "CLOSE_WAIT"},
+        ),
+        Document(
+            page_content="同一章节的第二个切片",
+            metadata={"_file_name": "连接排查.md", "h1": "连接异常", "h2": "CLOSE_WAIT"},
+        ),
+        Document(
+            page_content="同一文件的另一章节",
+            metadata={"_file_name": "连接排查.md", "h1": "连接异常", "h2": "连接池"},
+        ),
+    ]
+
+    result = format_source_references(docs)
+
+    assert result.startswith("\n\n---\n### 参考来源")
+    assert result.count("连接排查.md > 连接异常 > CLOSE_WAIT") == 1
+    assert "连接排查.md > 连接异常 > 连接池" in result
+
+
+def test_format_source_references_returns_empty_for_empty_docs():
+    """知识库拒答或未调用检索工具时，不应显示空的来源标题。"""
+    from app.tools.knowledge_tool import format_source_references
+
+    assert format_source_references([]) == ""
+
+
+def test_build_source_references_only_keeps_metadata_needed_by_workflow_state():
+    """AIOps State 只保存文件名和标题，不应把完整切片正文写进检查点。"""
+    from app.tools.knowledge_tool import build_source_references
+
+    docs = [
+        Document(
+            page_content="这是一大段不需要写入 State 的正文",
+            metadata={"_file_name": "连接排查.md", "h1": "连接异常", "h2": "CLOSE_WAIT"},
+        )
+    ]
+
+    result = build_source_references(docs)
+
+    assert result == [
+        {
+            "file_name": "连接排查.md",
+            "headers": ["连接异常", "CLOSE_WAIT"],
+        }
+    ]
