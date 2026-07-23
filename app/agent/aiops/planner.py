@@ -3,6 +3,7 @@ Planner 节点：制定执行计划
 基于 LangGraph 官方教程实现
 """
 
+import asyncio
 from textwrap import dedent
 from typing import Dict, Any, List
 from langchain_core.prompts import ChatPromptTemplate
@@ -12,6 +13,7 @@ from loguru import logger
 
 from app.config import config
 from app.tools import DEFAULT_LOCAL_AGENT_TOOLS, retrieve_knowledge
+from app.tools.knowledge_tool import build_source_references
 from app.agent.mcp_client import get_mcp_client_with_retry
 from .state import PlanExecuteState
 from .utils import format_tools_description
@@ -77,13 +79,19 @@ async def planner(state: PlanExecuteState) -> Dict[str, Any]:
         # 步骤1: 查询内部文档获取相关经验
         logger.info("查询内部文档，寻找相关经验...")
         experience_docs = ""
+        knowledge_sources = []
         try:
-            # retrieve_knowledge 使用 response_format="content_and_artifact"
-            # ainvoke() 只返回 content（字符串），不是元组
-            context_str = await retrieve_knowledge.ainvoke({"query": input_text})
-            if context_str and context_str.strip():
+            # Planner 既需要 context 给模型制定计划，也需要原始 docs 的 metadata
+            # 作为最终 AIOps 报告的可追溯来源。工具本身是同步函数，放到线程池执行，
+            # 避免 Milvus / DashScope 调用阻塞 LangGraph 的异步事件循环。
+            context_str, docs = await asyncio.to_thread(
+                retrieve_knowledge.func, input_text
+            )
+            if docs:
                 experience_docs = context_str
+                knowledge_sources = build_source_references(docs)
                 logger.info(f"找到相关经验文档，长度: {len(experience_docs)}")
+                logger.info(f"已记录 {len(knowledge_sources)} 条知识库来源")
             else:
                 logger.info("未找到相关经验文档")
         except Exception as e:
@@ -145,7 +153,10 @@ async def planner(state: PlanExecuteState) -> Dict[str, Any]:
         for i, step in enumerate(plan_steps, 1):
             logger.info(f"  步骤{i}: {step}")
 
-        return {"plan": plan_steps}
+        return {
+            "plan": plan_steps,
+            "knowledge_sources": knowledge_sources,
+        }
 
     except Exception as e:
         logger.error(f"生成计划失败: {e}", exc_info=True)

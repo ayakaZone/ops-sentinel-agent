@@ -6,6 +6,8 @@
 from typing import List, TypedDict, Annotated
 import operator
 
+from app.tools.knowledge_tool import SourceReference
+
 
 class PlanExecuteState(TypedDict):
     """Plan-Execute-Replan 状态"""
@@ -19,6 +21,10 @@ class PlanExecuteState(TypedDict):
     # 已执行的步骤历史
     # 使用 operator.add 实现追加式更新（而非覆盖）
     past_steps: Annotated[List[tuple], operator.add]
+
+    # Planner 预检索知识库时保存的来源。各节点返回的列表会追加合并，最终报告
+    # 统一格式化展示；每项只保存文件名和标题层级，不保存完整文档正文。
+    knowledge_sources: Annotated[List[SourceReference], operator.add]
     
     # 最终响应/报告
     response: str

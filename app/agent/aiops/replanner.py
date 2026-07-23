@@ -12,6 +12,7 @@ from loguru import logger
 
 from app.config import config
 from app.tools import DEFAULT_LOCAL_AGENT_TOOLS
+from app.tools.knowledge_tool import format_source_reference_records
 from app.agent.mcp_client import get_mcp_client_with_retry
 from .state import PlanExecuteState
 from .utils import format_tools_description
@@ -245,6 +246,8 @@ async def _generate_response(state: PlanExecuteState, llm: ChatQwen) -> Dict[str
 
     input_text = state.get("input", "")
     past_steps = state.get("past_steps", [])
+    knowledge_sources = state.get("knowledge_sources", [])
+    source_footer = format_source_reference_records(knowledge_sources)
 
     # 格式化执行历史
     execution_history = "\n\n".join([
@@ -270,6 +273,11 @@ async def _generate_response(state: PlanExecuteState, llm: ChatQwen) -> Dict[str
             # 如果返回的是字典
             final_response = response_obj.get("response", "")  # type: ignore
 
+        # 来源清单由程序根据 Planner 保存的真实 metadata 统一追加，模型不负责生成，
+        # 因此不会伪造文件名，也不会在每个执行步骤中重复展示。
+        if source_footer:
+            final_response += source_footer
+
         logger.info(f"最终响应生成完成，长度: {len(final_response)}")
 
         return {"response": final_response}
@@ -288,6 +296,8 @@ async def _generate_response(state: PlanExecuteState, llm: ChatQwen) -> Dict[str
 ## 说明
 由于系统异常，无法生成完整响应。以上是已收集的信息。
 """
+        if source_footer:
+            fallback_response += source_footer
         return {"response": fallback_response}
 
 

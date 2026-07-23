@@ -117,6 +117,7 @@ class AIOpsService:
                 "input": user_input,
                 "plan": [],
                 "past_steps": [],
+                "knowledge_sources": [],
                 "response": ""
             }
 
