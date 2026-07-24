@@ -7,7 +7,7 @@ from fastapi import APIRouter
 from sse_starlette.sse import EventSourceResponse
 from loguru import logger
 
-from app.models.aiops import AIOpsRequest
+from app.models.aiops import AIOpsApprovalRequest, AIOpsRequest
 from app.services.aiops_service import aiops_service
 
 router = APIRouter()
@@ -148,6 +148,40 @@ async def diagnose_stream(request: AIOpsRequest):
                     "stage": "exception",
                     "message": f"诊断异常: {str(e)}"
                 }, ensure_ascii=False)
+            }
+
+    return EventSourceResponse(event_generator())
+
+
+@router.post("/aiops/approval")
+async def resume_approval_stream(request: AIOpsApprovalRequest):
+    """resume_approval_stream（提交审批决定并恢复已暂停的 AIOps 工作流）。"""
+
+    async def event_generator():
+        try:
+            async for event in aiops_service.resume_approval(
+                session_id=request.session_id,
+                approval_id=request.approval_id,
+                decision=request.decision,
+                comment=request.comment,
+            ):
+                yield {"event": "message", "data": json.dumps(event, ensure_ascii=False)}
+        except ValueError as error:
+            yield {
+                "event": "message",
+                "data": json.dumps(
+                    {"type": "error", "stage": "approval_validation", "message": str(error)},
+                    ensure_ascii=False,
+                ),
+            }
+        except Exception as error:
+            logger.error("恢复 AIOps 审批工作流异常: {}", error, exc_info=True)
+            yield {
+                "event": "message",
+                "data": json.dumps(
+                    {"type": "error", "stage": "approval_exception", "message": str(error)},
+                    ensure_ascii=False,
+                ),
             }
 
     return EventSourceResponse(event_generator())

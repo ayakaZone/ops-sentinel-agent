@@ -4,18 +4,21 @@ Executor 节点：执行单个步骤
 """
 
 from typing import Dict, Any
+from uuid import uuid4
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_qwq import ChatQwen
+from langgraph.types import Command
 from langgraph.prebuilt import ToolNode
 from loguru import logger
 
 from app.config import config
-from app.tools import DEFAULT_LOCAL_AGENT_TOOLS
+from app.tools import AIOPS_LOCAL_AGENT_TOOLS
 from app.agent.mcp_client import get_mcp_client_with_retry
+from .risk_policy import assess_tool_risk
 from .state import PlanExecuteState
 
 
-async def executor(state: PlanExecuteState) -> Dict[str, Any]:
+async def executor(state: PlanExecuteState) -> Command | Dict[str, Any]:
     """
     执行节点：执行计划中的下一个步骤
     
@@ -28,7 +31,7 @@ async def executor(state: PlanExecuteState) -> Dict[str, Any]:
     # 如果计划为空，不执行
     if not plan:
         logger.info("计划为空，跳过执行")
-        return {}
+        return Command(goto="replanner")
 
     # 取出第一个步骤
     task = plan[0]
@@ -36,7 +39,7 @@ async def executor(state: PlanExecuteState) -> Dict[str, Any]:
 
     try:
         # 获取本地工具
-        local_tools = list(DEFAULT_LOCAL_AGENT_TOOLS)
+        local_tools = list(AIOPS_LOCAL_AGENT_TOOLS)
 
         # 获取 MCP 工具
         mcp_client = await get_mcp_client_with_retry()
@@ -82,6 +85,43 @@ async def executor(state: PlanExecuteState) -> Dict[str, Any]:
         # 第二步：如果有工具调用，执行工具
         if hasattr(llm_response, "tool_calls") and llm_response.tool_calls:
             logger.info(f"检测到 {len(llm_response.tool_calls)} 个工具调用")
+
+            # 遍历模型返回的工具调用列表
+            for tool_call in llm_response.tool_calls:
+                # 获取本次工具调用的工具名称与参数
+                tool_name = tool_call.get("name", "")
+                tool_arguments = tool_call.get("args", {})
+
+                # 调用 assess_tool_risk（工具风险分级）判断是否需要人工审批
+                assessment = assess_tool_risk(tool_name, tool_arguments)
+
+                # 如果当前工具属于高风险操作，则构造待审批操作信息
+                if assessment["requires_approval"]:
+                    pending_approval = {
+                        # 生成本次审批单的唯一 ID
+                        "approval_id": str(uuid4()),
+                        # 保存当前计划步骤
+                        "task": task,
+                        # 保存待调用的工具名称
+                        "tool_name": tool_name,
+                        # 保存调用该工具需要的参数
+                        "arguments": tool_arguments,
+                        # 保存模型本次工具调用的 ID
+                        "tool_call_id": tool_call.get("id", ""),
+                        # 保存工具风险等级
+                        "risk_level": assessment["risk_level"],
+                        # 保存需要人工审批的原因
+                        "reason": assessment["reason"],
+                    }
+                    logger.warning(
+                        "检测到需要人工审批的工具调用：{}，已暂停执行",
+                        tool_name,
+                    )
+                    # 跳转到 request_human_approval（请求人工审批）节点
+                    return Command(
+                        goto="request_human_approval",
+                        update={"pending_approval": pending_approval},
+                    )
             
             # 使用 ToolNode 自动执行工具
             messages.append(llm_response)
@@ -99,14 +139,20 @@ async def executor(state: PlanExecuteState) -> Dict[str, Any]:
         logger.info(f"步骤执行完成，结果长度: {len(result)}")
 
         # 返回更新：移除已执行的步骤，添加执行历史
-        return {
-            "plan": plan[1:],  # 移除第一个步骤
-            "past_steps": [(task, result)],  # 使用 operator.add 追加
-        }
+        return Command(
+            goto="replanner",
+            update={
+                "plan": plan[1:],  # 移除第一个步骤
+                "past_steps": [(task, result)],  # 使用 operator.add 追加
+            },
+        )
 
     except Exception as e:
         logger.error(f"执行步骤失败: {e}", exc_info=True)
-        return {
-            "plan": plan[1:],
-            "past_steps": [(task, f"执行失败: {str(e)}")],
-        }
+        return Command(
+            goto="replanner",
+            update={
+                "plan": plan[1:],
+                "past_steps": [(task, f"执行失败: {str(e)}")],
+            },
+        )

@@ -3,11 +3,20 @@
 基于 LangGraph 官方教程实现
 """
 
-from typing import AsyncGenerator, Dict, Any
+from typing import AsyncGenerator, Dict, Any, Literal
 from langgraph.graph import StateGraph, END
+from langgraph.types import Command
 from loguru import logger
 
-from app.agent.aiops import PlanExecuteState, planner, executor, replanner
+from app.agent.aiops import (
+    PlanExecuteState,
+    execute_approved_action,
+    executor,
+    handle_rejection,
+    planner,
+    replanner,
+    request_human_approval,
+)
 from app.config import config
 from app.services.usage_tracker import daily_usage_counter
 
@@ -16,6 +25,9 @@ from app.services.usage_tracker import daily_usage_counter
 NODE_PLANNER = "planner"
 NODE_EXECUTOR = "executor"
 NODE_REPLANNER = "replanner"
+NODE_REQUEST_HUMAN_APPROVAL = "request_human_approval"
+NODE_EXECUTE_APPROVED_ACTION = "execute_approved_action"
+NODE_HANDLE_REJECTION = "handle_rejection"
 
 
 class AIOpsService:
@@ -53,13 +65,25 @@ class AIOpsService:
         workflow.add_node(NODE_PLANNER, planner)      # 制定计划
         workflow.add_node(NODE_EXECUTOR, executor)  # 执行步骤
         workflow.add_node(NODE_REPLANNER, replanner)  # 重新规划
+        # 节点名与函数名保持完全一致，阅读 goto="request_human_approval" 时
+        # 可以直接定位到 approval.py 中同名的 request_human_approval 函数。
+        workflow.add_node(
+            NODE_REQUEST_HUMAN_APPROVAL,
+            request_human_approval,
+        )
+        workflow.add_node(NODE_EXECUTE_APPROVED_ACTION, execute_approved_action)
+        workflow.add_node(NODE_HANDLE_REJECTION, handle_rejection)
 
         # 设置入口点
         workflow.set_entry_point(NODE_PLANNER)
 
         # 定义边
         workflow.add_edge(NODE_PLANNER, NODE_EXECUTOR)     # planner -> executor
-        workflow.add_edge(NODE_EXECUTOR, NODE_REPLANNER)   # executor -> replanner
+        # 审批通过后，从执行已批准操作节点跳转到 replanner 节点
+        workflow.add_edge(NODE_EXECUTE_APPROVED_ACTION, NODE_REPLANNER)
+
+        # 审批拒绝后，从处理拒绝节点跳转到 replanner 节点
+        workflow.add_edge(NODE_HANDLE_REJECTION, NODE_REPLANNER)
 
         # replanner 的条件边
         def should_continue(state: PlanExecuteState) -> str:
@@ -118,52 +142,13 @@ class AIOpsService:
                 "plan": [],
                 "past_steps": [],
                 "knowledge_sources": [],
+                "pending_approval": None,
+                "approval_history": [],
                 "response": ""
             }
 
-            # 流式执行工作流
-            config_dict = {
-                "configurable": {
-                    "thread_id": session_id
-                }
-            }
-
-            async for event in self.graph.astream(
-                input=initial_state,
-                config=config_dict,
-                stream_mode="updates"
-            ):
-                # 解析事件
-                for node_name, node_output in event.items():
-                    logger.info(f"节点 '{node_name}' 输出事件")
-
-                    # 根据节点类型生成不同的事件
-                    if node_name == NODE_PLANNER:
-                        yield self._format_planner_event(node_output)
-
-                    elif node_name == NODE_EXECUTOR:
-                        yield self._format_executor_event(node_output)
-
-                    elif node_name == NODE_REPLANNER:
-                        yield self._format_replanner_event(node_output)
-
-            # 获取最终状态
-            final_state = self.graph.get_state(config_dict)
-            final_response = ""
-
-            # 安全地获取响应（处理 values 可能为 None 的情况）
-            if final_state and final_state.values:
-                final_response = final_state.values.get("response", "")
-
-            # 发送完成事件
-            yield {
-                "type": "complete",
-                "stage": "complete",
-                "message": "任务执行完成",
-                "response": final_response
-            }
-
-            logger.info(f"[会话 {session_id}] 任务执行完成")
+            async for event in self._run_graph(initial_state, session_id):
+                yield event
 
         except Exception as e:
             logger.error(f"[会话 {session_id}] 任务执行失败: {e}", exc_info=True)
@@ -172,6 +157,91 @@ class AIOpsService:
                 "stage": "error",
                 "message": f"任务执行出错: {str(e)}"
             }
+
+    async def resume_approval(
+        self,
+        session_id: str,
+        approval_id: str,
+        decision: Literal["approved", "rejected"],
+        comment: str = "",
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """resume_approval（提交人工审批结果并恢复工作流）。"""
+        config_dict = self._get_graph_config(session_id)
+        current_state = await self.graph.aget_state(config_dict)
+        pending_action = current_state.values.get("pending_approval") if current_state.values else None
+
+        if not pending_action:
+            raise ValueError("当前会话没有等待审批的高风险操作")
+        if pending_action.get("approval_id") != approval_id:
+            raise ValueError("审批单 ID 与当前待审批操作不匹配")
+
+        logger.info("[会话 {}] 收到人工审批结果：{}", session_id, decision)
+        # 使用 Command(resume=...) 将人工审批结果传回暂停的 interrupt
+        resume_command = Command(resume={"decision": decision, "comment": comment})
+        async for event in self._run_graph(resume_command, session_id):
+            yield event
+
+    def _get_graph_config(self, session_id: str) -> Dict[str, Any]:
+        """_get_graph_config（构造 LangGraph 会话配置）。"""
+        return {"configurable": {"thread_id": session_id}}
+
+    async def _run_graph(
+        self,
+        graph_input: PlanExecuteState | Command,
+        session_id: str,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """_run_graph（执行或恢复图，并把 LangGraph 事件转换为 SSE 事件）。"""
+        config_dict = self._get_graph_config(session_id)
+
+        async for event in self.graph.astream(
+            input=graph_input,
+            config=config_dict,
+            stream_mode="updates",
+        ):
+            # 判断当前事件是否为 interrupt（工作流暂停）事件
+            if "__interrupt__" in event:
+                # 获取 interrupt 返回的审批单列表
+                interrupt_items = event["__interrupt__"]
+
+                # 获取第一张审批单
+                first_interrupt = interrupt_items[0] if interrupt_items else None
+
+                # 获取 interrupt 中保存的审批单内容
+                approval_payload = getattr(first_interrupt, "value", {})
+
+                # 返回 approval_required（需要人工审批）SSE 事件给前端
+                yield {
+                    "type": "approval_required",
+                    "stage": "human_approval",
+                    "message": "检测到高风险操作，等待人工审批",
+                    "session_id": session_id,
+                    "approval": approval_payload,
+                }
+                logger.info("[会话 {}] 工作流已暂停，等待人工审批", session_id)
+                return
+
+            for node_name, node_output in event.items():
+                logger.info(f"节点 '{node_name}' 输出事件")
+                if node_name == NODE_PLANNER:
+                    yield self._format_planner_event(node_output)
+                elif node_name == NODE_EXECUTOR:
+                    yield self._format_executor_event(node_output)
+                elif node_name == NODE_REPLANNER:
+                    yield self._format_replanner_event(node_output)
+                elif node_name == NODE_EXECUTE_APPROVED_ACTION:
+                    yield self._format_approved_action_event(node_output)
+                elif node_name == NODE_HANDLE_REJECTION:
+                    yield self._format_rejection_event(node_output)
+
+        final_state = await self.graph.aget_state(config_dict)
+        final_response = final_state.values.get("response", "") if final_state.values else ""
+        yield {
+            "type": "complete",
+            "stage": "complete",
+            "message": "任务执行完成",
+            "response": final_response,
+        }
+        logger.info(f"[会话 {session_id}] 任务执行完成")
 
     async def diagnose(
         self,
@@ -359,6 +429,28 @@ class AIOpsService:
                 "message": f"评估完成，{'继续执行剩余步骤' if plan else '准备生成最终响应'}",
                 "remaining_steps": len(plan)
             }
+
+    def _format_approved_action_event(self, state: Dict | None) -> Dict:
+        """_format_approved_action_event（格式化已批准操作的执行事件）。"""
+        past_steps = state.get("past_steps", []) if state else []
+        step_name = past_steps[-1][0] if past_steps else "高风险操作"
+        return {
+            "type": "step_complete",
+            "stage": "approved_action_executed",
+            "message": "人工审批已通过，高风险操作已执行",
+            "current_step": step_name,
+        }
+
+    def _format_rejection_event(self, state: Dict | None) -> Dict:
+        """_format_rejection_event（格式化人工拒绝事件）。"""
+        past_steps = state.get("past_steps", []) if state else []
+        step_name = past_steps[-1][0] if past_steps else "高风险操作"
+        return {
+            "type": "step_rejected",
+            "stage": "approval_rejected",
+            "message": "人工已拒绝高风险操作，系统未执行该操作",
+            "current_step": step_name,
+        }
 
 
 # 全局单例

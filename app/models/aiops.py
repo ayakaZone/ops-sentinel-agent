@@ -2,7 +2,7 @@
 AIOps 请求和响应模型
 """
 
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 from pydantic import BaseModel, Field
 
 
@@ -20,6 +20,15 @@ class AIOpsRequest(BaseModel):
                 "session_id": "session-123"
             }
         }
+
+
+class AIOpsApprovalRequest(BaseModel):
+    """AIOps 高风险操作的人工审批请求。"""
+
+    session_id: str = Field(description="与暂停工作流对应的会话 ID")
+    approval_id: str = Field(description="approval_required 事件返回的审批单 ID")
+    decision: Literal["approved", "rejected"] = Field(description="人工审批决定")
+    comment: str = Field(default="", max_length=500, description="审批备注，可选")
 
 
 class AlertInfo(BaseModel):

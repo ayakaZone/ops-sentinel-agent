@@ -3,7 +3,7 @@
 基于 LangGraph 官方教程实现
 """
 
-from typing import List, TypedDict, Annotated
+from typing import Any, List, TypedDict, Annotated
 import operator
 
 from app.tools.knowledge_tool import SourceReference
@@ -25,6 +25,13 @@ class PlanExecuteState(TypedDict):
     # Planner 预检索知识库时保存的来源。各节点返回的列表会追加合并，最终报告
     # 统一格式化展示；每项只保存文件名和标题层级，不保存完整文档正文。
     knowledge_sources: Annotated[List[SourceReference], operator.add]
+
+    # 保存当前等待人工审批的工具调用信息
+    pending_approval: dict[str, Any] | None
+
+    # 保存每次人工批准或拒绝的审批记录
+    # 使用 operator.add 将新记录追加到历史记录列表中
+    approval_history: Annotated[List[dict[str, Any]], operator.add]
     
     # 最终响应/报告
     response: str

@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from loguru import logger
 
 from app.config import config
-from app.tools import DEFAULT_LOCAL_AGENT_TOOLS, retrieve_knowledge
+from app.tools import AIOPS_LOCAL_AGENT_TOOLS, retrieve_knowledge
 from app.tools.knowledge_tool import build_source_references
 from app.agent.mcp_client import get_mcp_client_with_retry
 from .state import PlanExecuteState
@@ -99,7 +99,7 @@ async def planner(state: PlanExecuteState) -> Dict[str, Any]:
 
         # 步骤2: 获取可用工具列表
         # 获取本地工具
-        local_tools = list(DEFAULT_LOCAL_AGENT_TOOLS)
+        local_tools = list(AIOPS_LOCAL_AGENT_TOOLS)
 
         # 获取 MCP 工具
         mcp_client = await get_mcp_client_with_retry()
